@@ -26,7 +26,8 @@ NOTES
   Trajectories are XYZ / extended-XYZ or native LAMMPS dump (ITEM: TIMESTEP).
   --elements maps numeric type tokens to symbols by position: --elements O,Al
   labels type 1 as O and type 2 as Al.
-  Rows with non-finite (NaN/inf) coordinates are dropped.
+  Rows with non-finite (NaN/inf) coordinates are dropped. Safe on in-flight
+  dumps: a file still being written parses to its complete frames.
   Every subcommand accepts -h/--help.
   `run` finds LAMMPS via $MDENGINE_LMP, then lmp_mpi / lmp_serial / lmp on PATH.
   Default --threads = number of performance cores.

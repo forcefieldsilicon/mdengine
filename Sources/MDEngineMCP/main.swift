@@ -207,7 +207,7 @@ enum Jobs {
 
 let toolDefs: [[String: Any]] = [
     ["name": "trajectory_info",
-     "description": "Inspect an MD trajectory (XYZ / extended-XYZ or native LAMMPS dump): frame count, atoms per frame, element histogram of the last frame, bounding box in Å.",
+     "description": "Inspect an MD trajectory (XYZ / extended-XYZ or native LAMMPS dump; safe on in-flight dumps still being written — reports complete frames): frame count, atoms per frame, element histogram of the last frame, bounding box in Å.",
      "inputSchema": ["type": "object",
                      "properties": ["path": ["type": "string", "description": "Path to the trajectory file"]],
                      "required": ["path"]]],

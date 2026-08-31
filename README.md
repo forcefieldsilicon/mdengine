@@ -34,6 +34,10 @@ swift build -c release            # all three products
 | `lj_melt.xyz` / `lj_melt.in` | Lennard-Jones argon melt — the minimal smoke test |
 | `fe_oxidation.xyz` / `fe_oxidation.in` | ReaxFF iron oxidation: a bcc Fe slab meeting O₂ gas, using `ffield.reax.Fe_O_C_H` from the LAMMPS distribution |
 
+Trajectory readers are safe on **in-flight dumps** — a file a running
+simulation is still writing parses to its complete frames, so you can inspect
+a run mid-flight. Rows with non-finite (NaN/inf) coordinates are dropped.
+
 Both decks are ready inputs for `mdengine run` and `submit_lammps`. Bare
 force-field names resolve automatically: if `$LAMMPS_POTENTIALS` is unset,
 MDEngine derives it from the LAMMPS install.
