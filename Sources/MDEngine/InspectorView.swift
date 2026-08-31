@@ -13,9 +13,18 @@ struct InspectorView: View {
     @AppStorage("timelineMajorPct") private var timelineMajorPct = 20
     @AppStorage("timelineMinorPct") private var timelineMinorPct = 5
     @AppStorage("timelineShowNumbers") private var timelineShowNumbers = true
+    @AppStorage("orthographicProjection") private var orthographic = false
 
     var body: some View {
         Form {
+            Section("View") {
+                Picker("Projection", selection: $orthographic) {
+                    Text("Perspective").tag(false)
+                    Text("Orthographic").tag(true)
+                }
+                .pickerStyle(.segmented)
+            }
+
             Section("Timeline grid") {
                 Picker("Major marks", selection: $timelineMajorPct) {
                     ForEach([10, 20, 25, 50], id: \.self) { Text("every \($0)%").tag($0) }
@@ -60,6 +69,7 @@ struct InspectorView: View {
 
             Section {
                 Button("Restore Defaults") {
+                    orthographic = false
                     atomPointSize = 14
                     orbitSensitivity = 8
                     backgroundBrightness = 0.05

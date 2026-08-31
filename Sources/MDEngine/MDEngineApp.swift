@@ -33,7 +33,9 @@ struct MDEngineApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // One window: every window would share the same trajectory anyway, and
+        // macOS state restoration was resurrecting confusing blank duplicates.
+        Window("MDEngine", id: "main") {
             ContentView(model: model)
         }
         .commands {
@@ -49,6 +51,7 @@ struct MDEngineApp: App {
 /// Menu bar: MDEngine · File (Load/Export) · Edit (Application Settings…) · Help (User Manual).
 struct AppCommands: Commands {
     @ObservedObject var model: ContentViewModel
+    @AppStorage("orthographicProjection") private var orthographic = false
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -68,6 +71,9 @@ struct AppCommands: Commands {
                 model.showInspector.toggle()
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
+            Toggle("Orthographic Projection", isOn: $orthographic)
+                .keyboardShortcut("p", modifiers: [.command, .option])
+            Divider()
         }
         CommandGroup(replacing: .help) {
             Button("MDEngine User Manual") {

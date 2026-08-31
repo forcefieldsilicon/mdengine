@@ -37,6 +37,7 @@ struct ContentView: View {
 
             summaryBar
         }
+        .navigationTitle(model.sourceName.isEmpty ? "MDEngine" : model.sourceName)
         .inspector(isPresented: $model.showInspector) {
             InspectorView(model: model)
                 .inspectorColumnWidth(min: 220, ideal: 260, max: 340)

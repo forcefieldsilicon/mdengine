@@ -180,14 +180,23 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let size = view.drawableSize
         let aspect = size.height > 0 ? Float(size.width / size.height) : 1
-        let projection = Renderer.perspective(fovY: .pi / 4, aspect: aspect, near: 0.05, far: 100)
+        let orthographic = UserDefaults.standard.bool(forKey: "orthographicProjection")
+        // Orthographic frames the same height the perspective camera would see
+        // at the current distance, so zoom keeps working and switching
+        // projections holds the framing.
+        let projection = orthographic
+            ? Renderer.orthographic(height: 2 * distance * tan(Float.pi / 8),
+                                    aspect: aspect, near: 0.05, far: 100)
+            : Renderer.perspective(fovY: .pi / 4, aspect: aspect, near: 0.05, far: 100)
         let viewMatrix = Renderer.translation(pan.x, pan.y, -distance)
                        * Renderer.rotationX(pitch)
                        * Renderer.rotationY(yaw)
         // Base size is divided by clip-space w in the shader, so atoms grow as
         // the camera closes in and nearer atoms render larger than far ones.
+        // Orthographic w is 1, so pre-divide by distance to keep sizes matched.
+        let baseSize = Renderer.pref("atomPointSize", default: 14)
         var uniforms = Uniforms(mvp: projection * viewMatrix,
-                                pointSize: Renderer.pref("atomPointSize", default: 14))
+                                pointSize: orthographic ? baseSize / distance : baseSize)
 
         let bg = Double(Renderer.pref("backgroundBrightness", default: 0.05))
         view.clearColor = MTLClearColorMake(bg, bg, bg + 0.03, 1.0)
@@ -213,6 +222,16 @@ final class Renderer: NSObject, MTKViewDelegate {
             SIMD4<Float>(0, y, 0, 0),
             SIMD4<Float>(0, 0, z, -1),
             SIMD4<Float>(0, 0, z * near, 0)
+        ))
+    }
+
+    private static func orthographic(height: Float, aspect: Float, near: Float, far: Float) -> simd_float4x4 {
+        let w = height * aspect, h = height
+        return simd_float4x4(columns: (
+            SIMD4<Float>(2 / w, 0, 0, 0),
+            SIMD4<Float>(0, 2 / h, 0, 0),
+            SIMD4<Float>(0, 0, -1 / (far - near), 0),
+            SIMD4<Float>(0, 0, -near / (far - near), 1)
         ))
     }
 
