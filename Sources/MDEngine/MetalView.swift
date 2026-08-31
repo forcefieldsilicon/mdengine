@@ -11,6 +11,28 @@ final class InteractiveMTKView: MTKView {
     private var isPanning = false
     private var draggedSinceDown = false
 
+    // MTKView's internal display link proved unreliable across SwiftUI window
+    // re-hosting (views ended up never drawing - verified by sampling: zero
+    // draw calls). Drive rendering with an explicit display link instead:
+    // alive exactly while the view sits in a window.
+    private var link: CADisplayLink?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        isPaused = true                 // never rely on the internal loop
+        enableSetNeedsDisplay = false
+        link?.invalidate()
+        link = nil
+        if window != nil {
+            link = displayLink(target: self, selector: #selector(tick))
+            link?.add(to: .main, forMode: .common)
+        }
+    }
+
+    @objc private func tick() {
+        draw()                          // runs the delegate's render pass
+    }
+
     override var acceptsFirstResponder: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
