@@ -13,10 +13,26 @@ struct ContentView: View {
                 .frame(minWidth: 600, minHeight: 600)
 
             if model.frames.count > 1 {
-                TrajectoryScrubber(frameCount: model.frames.count,
-                                   index: $model.frameIndex)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
+                HStack(alignment: .center, spacing: 14) {
+                    VStack(spacing: 3) {
+                        Button {
+                            model.togglePlayback()
+                        } label: {
+                            Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                                .frame(width: 22)
+                        }
+                        .buttonStyle(.bordered)
+                        .help(model.isPlaying ? "Pause playback" : "Play through the trajectory")
+                        Toggle("Loop", isOn: $model.loopPlayback)
+                            .toggleStyle(.checkbox)
+                            .controlSize(.mini)
+                            .help("Repeat from the first frame when playback reaches the end")
+                    }
+                    TrajectoryScrubber(frameCount: model.frames.count,
+                                       index: $model.frameIndex)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
             }
 
             summaryBar
@@ -45,9 +61,14 @@ struct ContentView: View {
                     .foregroundColor(ElementColors.color(for: top[i].0))
             }
             Spacer()
+            if model.isFollowingFile {
+                Label("live", systemImage: "dot.radiowaves.left.and.right")
+                    .foregroundColor(.green)
+                    .help("Following the file: frames a running simulation appends show up automatically")
+            }
             Text(total == 0
                  ? "Loading trajectory…"
-                 : "\(model.sourceName) · drag orbit · double-click-hold pan · scroll zoom")
+                 : "\(model.sourceName) · Orbit: drag · Pan: double-click-drag · Zoom: scroll")
                 .foregroundColor(.secondary)
                 .lineLimit(1)
             Button {

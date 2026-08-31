@@ -43,18 +43,22 @@
   point-sphere cloud using Metal. It ships with two examples — a Lennard-Jones argon melt and a ReaxFF iron
   oxidation run (bcc Fe slab meeting O₂ gas), each with the deck that
   generated it — and opens any XYZ / extended-XYZ file from disk. Multi-frame trajectories open at their final
-  frame, with a timeline for scrubbing.</p>
+  frame, with a timeline for scrubbing and playback. Loaded files are
+  <b>followed live</b>: when a running simulation appends frames to the file,
+  they appear on the timeline automatically (the summary bar shows a green
+  “live” badge) — no re-loading needed.</p>
 
   <h2>Camera controls</h2>
   <table>
     <tr><th>Gesture</th><th>Action</th></tr>
-    <tr><td>Click + drag</td><td>Orbit around the structure</td></tr>
-    <tr><td>Double-click, hold + drag</td><td>Pan (move the view position)</td></tr>
-    <tr><td>Scroll or trackpad pinch</td><td>Zoom in / out</td></tr>
-    <tr><td>Double-click (release without dragging)</td><td>Reset the camera to the home view</td></tr>
-    <tr><td>Timeline (bottom)</td><td>Drag to scrub through trajectory frames; frame
-        numbers under major marks. Grid defaults to 20% major / 5% minor marks —
-        configurable in the inspector</td></tr>
+    <tr><td><b>Orbit</b> — click + drag</td><td>Rotate around the structure</td></tr>
+    <tr><td><b>Pan</b> — double-click-drag (hold after the second click)</td><td>Move the view position</td></tr>
+    <tr><td><b>Zoom</b> — scroll or trackpad pinch</td><td>Move closer / further</td></tr>
+    <tr><td><b>Reset</b> — double-click (release without dragging)</td><td>Return to the home view</td></tr>
+    <tr><td><b>Timeline</b> (bottom)</td><td>Drag to scrub through frames; frame numbers
+        under major marks (grid configurable in the inspector). The play button
+        steps through the trajectory; check <b>Loop</b> to repeat from the first
+        frame at the end.</td></tr>
   </table>
 
   <h2>Menus</h2>

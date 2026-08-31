@@ -10,6 +10,19 @@ final class ContentViewModel: ObservableObject {
     @Published var showInspector = false
     @Published var cameraResetToken = 0   // bumped by inspector's Reset Camera
 
+    // MARK: Playback
+    @Published var isPlaying = false
+    @Published var loopPlayback = UserDefaults.standard.bool(forKey: "loopPlayback") {
+        didSet { UserDefaults.standard.set(loopPlayback, forKey: "loopPlayback") }
+    }
+    private var playTimer: Timer?
+
+    // MARK: Live following of a growing trajectory file
+    @Published var isFollowingFile = false
+    private var watchedURL: URL?
+    private var watchedSize: Int = -1
+    private var watchTimer: Timer?
+
     /// The frame currently on screen.
     var atoms: [Arv] { frames.indices.contains(frameIndex) ? frames[frameIndex] : [] }
 
@@ -29,6 +42,72 @@ final class ContentViewModel: ObservableObject {
         frameIndex = max(0, parsed.count - 1)   // open at the final state
         generation += 1
         sourceName = name
+    }
+
+    // MARK: - Playback
+
+    func togglePlayback() {
+        isPlaying ? stopPlayback() : startPlayback()
+    }
+
+    func startPlayback() {
+        guard frames.count > 1 else { return }
+        isPlaying = true
+        playTimer?.invalidate()
+        playTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.stepPlayback()
+        }
+    }
+
+    func stopPlayback() {
+        isPlaying = false
+        playTimer?.invalidate()
+        playTimer = nil
+    }
+
+    private func stepPlayback() {
+        if frameIndex < frames.count - 1 {
+            frameIndex += 1
+        } else if loopPlayback {
+            frameIndex = 0
+        } else {
+            stopPlayback()
+        }
+    }
+
+    // MARK: - Live following
+
+    /// Poll the loaded file; when a running simulation appends frames, re-parse
+    /// (the readers are safe on in-flight files) and extend the timeline in
+    /// place — no re-loading by the user. Camera and scrub position are kept;
+    /// if the user was at the final frame, follow the new final frame.
+    private func watch(url: URL) {
+        watchTimer?.invalidate()
+        watchedURL = url
+        watchedSize = fileSize(url)
+        isFollowingFile = true
+        watchTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.refreshFromWatchedFile()
+        }
+    }
+
+    private func refreshFromWatchedFile() {
+        guard let url = watchedURL else { return }
+        let size = fileSize(url)
+        guard size != watchedSize else { return }
+        watchedSize = size
+        guard size < 512_000_000 else { return }   // don't re-parse huge files every tick
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        let parsed = TrajectoryReader.parseFrames(text)
+        guard parsed.count != frames.count, !parsed.isEmpty else { return }
+        let wasAtEnd = frameIndex >= frames.count - 1
+        frames = parsed
+        generation += 1
+        frameIndex = wasAtEnd ? parsed.count - 1 : min(frameIndex, parsed.count - 1)
+    }
+
+    private func fileSize(_ url: URL) -> Int {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? -1
     }
 
     // MARK: - File menu
@@ -58,6 +137,7 @@ final class ContentViewModel: ObservableObject {
             return
         }
         show(parsed, name: url.lastPathComponent)
+        watch(url: url)
     }
 
     /// File ▸ Export File…: write the displayed frame back out as XYZ.

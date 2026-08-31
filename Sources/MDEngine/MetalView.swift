@@ -3,8 +3,8 @@ import MetalKit
 import LAMMPSCore
 
 /// MTKView subclass that feeds mouse/trackpad input to the renderer:
-/// drag to orbit, double-click-and-hold drag to pan (OVITO-style),
-/// scroll or pinch to zoom, plain double-click to reset the camera.
+/// Orbit: drag. Pan: double-click-drag (hold after the second click; OVITO-style).
+/// Zoom: scroll or pinch. Reset: plain double-click.
 final class InteractiveMTKView: MTKView {
     weak var renderer: Renderer?
 
