@@ -10,6 +10,32 @@ final class ContentViewModel: ObservableObject {
     @Published var showInspector = false
     @Published var cameraResetToken = 0   // bumped by inspector's Reset Camera
 
+    // MARK: Recent files (File ▸ Open Recent)
+    @Published var recentFiles: [String] =
+        UserDefaults.standard.stringArray(forKey: "recentFiles") ?? []
+
+    private func noteRecent(_ url: URL) {
+        var list = recentFiles.filter { $0 != url.path }
+        list.insert(url.path, at: 0)
+        recentFiles = Array(list.prefix(10))
+        UserDefaults.standard.set(recentFiles, forKey: "recentFiles")
+    }
+
+    func openRecent(_ path: String) {
+        guard FileManager.default.fileExists(atPath: path) else {
+            recentFiles.removeAll { $0 == path }
+            UserDefaults.standard.set(recentFiles, forKey: "recentFiles")
+            Self.alert("File not found", info: "\(path) no longer exists; removed from Open Recent.")
+            return
+        }
+        load(url: URL(fileURLWithPath: path))
+    }
+
+    func clearRecents() {
+        recentFiles = []
+        UserDefaults.standard.set(recentFiles, forKey: "recentFiles")
+    }
+
     // MARK: Playback
     @Published var isPlaying = false
     @Published var loopPlayback = UserDefaults.standard.bool(forKey: "loopPlayback") {
@@ -164,6 +190,7 @@ final class ContentViewModel: ObservableObject {
                     return
                 }
                 self.show(parsed, name: url.lastPathComponent)
+                self.noteRecent(url)
                 self.watch(url: url, knownSize: size)
             }
         }

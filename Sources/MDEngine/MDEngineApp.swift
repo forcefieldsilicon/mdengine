@@ -57,6 +57,20 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("Load File…") { model.loadFilePanel() }
                 .keyboardShortcut("o")
+            Menu("Open Recent") {
+                ForEach(model.recentFiles, id: \.self) { path in
+                    Button((path as NSString).lastPathComponent) {
+                        model.openRecent(path)
+                    }
+                    .help(path)
+                }
+                if !model.recentFiles.isEmpty {
+                    Divider()
+                    Button("Clear Menu") { model.clearRecents() }
+                } else {
+                    Button("No Recent Files") {}.disabled(true)
+                }
+            }
             Button("Export File…") { model.exportFilePanel() }
                 .keyboardShortcut("e")
                 .disabled(model.atoms.isEmpty)
