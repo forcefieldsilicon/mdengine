@@ -1,0 +1,86 @@
+import SwiftUI
+import MetalKit
+import LAMMPSCore
+
+/// MTKView subclass that feeds mouse/trackpad input to the renderer:
+/// drag to orbit, double-click-and-hold drag to pan (OVITO-style),
+/// scroll or pinch to zoom, plain double-click to reset the camera.
+final class InteractiveMTKView: MTKView {
+    weak var renderer: Renderer?
+
+    private var isPanning = false
+    private var draggedSinceDown = false
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        isPanning = event.clickCount >= 2
+        draggedSinceDown = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        draggedSinceDown = true
+        let dx = Float(event.deltaX)
+        let dy = Float(event.deltaY)
+        if isPanning {
+            renderer?.pan(dx: dx, dy: dy)
+        } else {
+            renderer?.orbit(dx: dx, dy: dy)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        // A double-click that never dragged is still the camera reset.
+        if isPanning && !draggedSinceDown {
+            renderer?.resetCamera()
+        }
+        isPanning = false
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let dy = Float(event.scrollingDeltaY)
+        let step: Float = event.hasPreciseScrollingDeltas ? 0.004 : 0.06
+        renderer?.zoom(byFactor: exp(dy * step))
+    }
+
+    override func magnify(with event: NSEvent) {
+        renderer?.zoom(byFactor: 1 + Float(event.magnification))
+    }
+}
+
+struct MetalView: NSViewRepresentable {
+    let frames: [[Arv]]
+    let frameIndex: Int
+    let generation: Int   // bumped by the model on every file load
+
+    func makeNSView(context: Context) -> MTKView {
+        let device = MTLCreateSystemDefaultDevice()!
+        let view = InteractiveMTKView(frame: .zero, device: device)
+
+        let renderer = Renderer(view: view)
+        view.delegate = renderer
+        view.renderer = renderer
+
+        context.coordinator.renderer = renderer
+        return view
+    }
+
+    func updateNSView(_ nsView: MTKView, context: Context) {
+        // Re-upload the trajectory only when a new file was loaded; scrubbing
+        // just switches frames.
+        if context.coordinator.generation != generation {
+            context.coordinator.renderer?.setTrajectory(frames)
+            context.coordinator.generation = generation
+        }
+        context.coordinator.renderer?.showFrame(frameIndex)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    class Coordinator {
+        var renderer: Renderer?
+        var generation = -1
+    }
+}
