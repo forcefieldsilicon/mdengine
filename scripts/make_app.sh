@@ -36,7 +36,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key><string>MDEngine</string>
-    <key>CFBundleIdentifier</key><string>com.gitinama.mdengine</string>
+    <key>CFBundleIdentifier</key><string>com.forcefieldsilicon.mdengine</string>
     <key>CFBundleName</key><string>MDEngine</string>
     <key>CFBundleDisplayName</key><string>MDEngine</string>
     <key>CFBundlePackageType</key><string>APPL</string>

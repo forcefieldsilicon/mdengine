@@ -8,7 +8,8 @@ struct ContentView: View {
         VStack(spacing: 0) {
             MetalView(frames: model.frames,
                       frameIndex: model.frameIndex,
-                      generation: model.generation)
+                      generation: model.generation,
+                      cameraResetToken: model.cameraResetToken)
                 .frame(minWidth: 600, minHeight: 600)
 
             if model.frames.count > 1 {
@@ -19,6 +20,10 @@ struct ContentView: View {
             }
 
             summaryBar
+        }
+        .inspector(isPresented: $model.showInspector) {
+            InspectorView(model: model)
+                .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
         }
         .onAppear {
             model.runSimulationAndDisplayResults()
@@ -44,6 +49,13 @@ struct ContentView: View {
                  : "\(model.sourceName) · drag orbit · double-click-hold pan · scroll zoom")
                 .foregroundColor(.secondary)
                 .lineLimit(1)
+            Button {
+                model.showInspector.toggle()
+            } label: {
+                Image(systemName: "sidebar.trailing")
+            }
+            .buttonStyle(.borderless)
+            .help("Show or hide the inspector (⌥⌘I)")
         }
         .font(.callout)
         .padding(.horizontal, 12)
@@ -52,14 +64,26 @@ struct ContentView: View {
 }
 
 /// Bottom timeline: drag to scrub through trajectory frames.
-/// Major tick every 20% of the trajectory, minor tick every 5%.
+/// Grid is user-configurable in the inspector (defaults: major tick every 20%
+/// of the trajectory, minor every 5%) with frame numbers under major ticks.
 struct TrajectoryScrubber: View {
     let frameCount: Int
     @Binding var index: Int
 
+    @AppStorage("timelineMajorPct") private var majorPct = 20
+    @AppStorage("timelineMinorPct") private var minorPct = 5
+    @AppStorage("timelineShowNumbers") private var showNumbers = true
+
     private let thumbSize: CGFloat = 14
+    private let trackY: CGFloat = 12
+
+    private func frameNumber(atPercent p: Int) -> Int {
+        Int((Double(p) / 100 * Double(frameCount - 1)).rounded()) + 1
+    }
 
     var body: some View {
+        let major = max(1, majorPct)
+        let minor = max(1, min(minorPct, major))
         HStack(spacing: 12) {
             Text("frame \(index + 1)/\(frameCount)")
                 .font(.caption.monospacedDigit())
@@ -68,7 +92,6 @@ struct TrajectoryScrubber: View {
 
             GeometryReader { geo in
                 let usable = max(1, geo.size.width - thumbSize)
-                let midY = geo.size.height / 2
                 let fraction = frameCount > 1 ? CGFloat(index) / CGFloat(frameCount - 1) : 0
 
                 ZStack(alignment: .topLeading) {
@@ -76,26 +99,33 @@ struct TrajectoryScrubber: View {
                     Capsule()
                         .fill(Color.secondary.opacity(0.22))
                         .frame(width: usable, height: 4)
-                        .position(x: thumbSize / 2 + usable / 2, y: midY)
+                        .position(x: thumbSize / 2 + usable / 2, y: trackY)
                     // Progress fill up to the thumb
                     Capsule()
                         .fill(Color.accentColor.opacity(0.55))
                         .frame(width: max(2, usable * fraction), height: 4)
-                        .position(x: thumbSize / 2 + usable * fraction / 2, y: midY)
-                    // Ticks: 5% minor, 20% major
-                    ForEach(0...20, id: \.self) { t in
-                        let major = t % 4 == 0
+                        .position(x: thumbSize / 2 + usable * fraction / 2, y: trackY)
+                    // Grid ticks + frame numbers under major ticks
+                    ForEach(Array(stride(from: 0, through: 100, by: minor)), id: \.self) { p in
+                        let isMajor = p % major == 0
+                        let x = thumbSize / 2 + usable * CGFloat(p) / 100
                         Rectangle()
-                            .fill(Color.secondary.opacity(major ? 0.75 : 0.4))
-                            .frame(width: major ? 2 : 1, height: major ? 14 : 7)
-                            .position(x: thumbSize / 2 + usable * CGFloat(t) / 20, y: midY)
+                            .fill(Color.secondary.opacity(isMajor ? 0.75 : 0.4))
+                            .frame(width: isMajor ? 2 : 1, height: isMajor ? 14 : 7)
+                            .position(x: x, y: trackY)
+                        if isMajor && showNumbers {
+                            Text("\(frameNumber(atPercent: p))")
+                                .font(.system(size: 9).monospacedDigit())
+                                .foregroundColor(.secondary)
+                                .position(x: x, y: trackY + 16)
+                        }
                     }
                     // Thumb
                     Circle()
                         .fill(Color.accentColor)
                         .overlay(Circle().stroke(Color.primary.opacity(0.25), lineWidth: 0.5))
                         .frame(width: thumbSize, height: thumbSize)
-                        .position(x: thumbSize / 2 + usable * fraction, y: midY)
+                        .position(x: thumbSize / 2 + usable * fraction, y: trackY)
                 }
                 .contentShape(Rectangle())
                 .gesture(
@@ -106,7 +136,7 @@ struct TrajectoryScrubber: View {
                         }
                 )
             }
-            .frame(height: 24)
+            .frame(height: showNumbers ? 34 : 24)
             .accessibilityElement()
             .accessibilityLabel("Trajectory timeline")
             .accessibilityValue("frame \(index + 1) of \(frameCount)")

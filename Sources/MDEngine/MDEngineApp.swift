@@ -45,6 +45,12 @@ struct AppCommands: Commands {
             SettingsLink { Text("Application Settings…") }
                 .keyboardShortcut(",")
         }
+        CommandGroup(after: .sidebar) {
+            Button(model.showInspector ? "Hide Inspector" : "Show Inspector") {
+                model.showInspector.toggle()
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
+        }
         CommandGroup(replacing: .help) {
             Button("MDEngine User Manual") {
                 let bundled = Bundle.main.resourceURL?

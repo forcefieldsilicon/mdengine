@@ -52,6 +52,7 @@ struct MetalView: NSViewRepresentable {
     let frames: [[Arv]]
     let frameIndex: Int
     let generation: Int   // bumped by the model on every file load
+    let cameraResetToken: Int
 
     func makeNSView(context: Context) -> MTKView {
         let device = MTLCreateSystemDefaultDevice()!
@@ -73,6 +74,10 @@ struct MetalView: NSViewRepresentable {
             context.coordinator.generation = generation
         }
         context.coordinator.renderer?.showFrame(frameIndex)
+        if context.coordinator.cameraResetToken != cameraResetToken {
+            context.coordinator.cameraResetToken = cameraResetToken
+            context.coordinator.renderer?.resetCamera()
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -82,5 +87,6 @@ struct MetalView: NSViewRepresentable {
     class Coordinator {
         var renderer: Renderer?
         var generation = -1
+        var cameraResetToken = 0
     }
 }

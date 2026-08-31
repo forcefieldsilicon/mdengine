@@ -7,6 +7,8 @@ final class ContentViewModel: ObservableObject {
     @Published var frameIndex: Int = 0
     @Published var generation: Int = 0   // bumped per file load, drives GPU re-upload
     @Published var sourceName: String = ""
+    @Published var showInspector = false
+    @Published var cameraResetToken = 0   // bumped by inspector's Reset Camera
 
     /// The frame currently on screen.
     var atoms: [Arv] { frames.indices.contains(frameIndex) ? frames[frameIndex] : [] }

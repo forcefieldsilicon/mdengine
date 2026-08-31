@@ -1,5 +1,7 @@
 # MDEngine
 
+*by ForceField Silicon*
+
 A native macOS molecular-dynamics workbench: a Metal trajectory viewer, a
 command-line tool, and an MCP server that lets AI agents inspect trajectories
 and run LAMMPS simulations as detached background jobs.
@@ -50,4 +52,4 @@ scripts: read them before running them.
 
 ## License
 
-MIT © Gitinama Inc.
+MIT © Gitinama Inc. (d/b/a ForceField Silicon)
