@@ -79,6 +79,21 @@ func findLAMMPS() -> String? {
     return nil
 }
 
+/// LAMMPS looks up bare force-field names (e.g. ffield.reax.Fe_O_C_H) in
+/// $LAMMPS_POTENTIALS. If the user hasn't set it, derive it from the LAMMPS
+/// install so bundled decks work out of the box.
+func potentialsDir(for lmp: String) -> String? {
+    if ProcessInfo.processInfo.environment["LAMMPS_POTENTIALS"] != nil { return nil }
+    let real = URL(fileURLWithPath: lmp).resolvingSymlinksInPath()
+    let candidates = [
+        real.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("share/lammps/potentials").path,
+        "/opt/homebrew/share/lammps/potentials",
+        "/usr/local/share/lammps/potentials",
+    ]
+    return candidates.first { FileManager.default.fileExists(atPath: $0) }
+}
+
 var args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
     print(usage)
@@ -174,6 +189,7 @@ case "run":
     task.currentDirectoryURL = inputURL.deletingLastPathComponent()
     var env = ProcessInfo.processInfo.environment
     env["OMP_NUM_THREADS"] = "\(threads)"
+    if let potentials = potentialsDir(for: lmp) { env["LAMMPS_POTENTIALS"] = potentials }
     task.environment = env
     // Inherit stdio so thermo output streams live to the terminal.
     print("mdengine: \(lmp) -sf omp -pk omp \(threads) -in \(inputURL.lastPathComponent)")

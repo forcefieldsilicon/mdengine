@@ -27,9 +27,16 @@ swift build -c release            # all three products
 ./scripts/make_app.sh             # assemble + install /Applications/MDEngine.app
 ```
 
-A Lennard-Jones argon melt is bundled as the example (`lj_melt.xyz`), together
-with the deck that generated it (`lj_melt.in`) — a ready test input for the
-job runner.
+## Bundled examples
+
+| Example | What it shows |
+|---|---|
+| `lj_melt.xyz` / `lj_melt.in` | Lennard-Jones argon melt — the minimal smoke test |
+| `fe_oxidation.xyz` / `fe_oxidation.in` | ReaxFF iron oxidation: a bcc Fe slab meeting O₂ gas, using `ffield.reax.Fe_O_C_H` from the LAMMPS distribution |
+
+Both decks are ready inputs for `mdengine run` and `submit_lammps`. Bare
+force-field names resolve automatically: if `$LAMMPS_POTENTIALS` is unset,
+MDEngine derives it from the LAMMPS install.
 
 ## MCP server
 
@@ -46,9 +53,18 @@ their exit code unattended under `~/.mdengine/jobs/`. LAMMPS runs launch with
 
 ## Security note
 
-Running a LAMMPS input executes whatever the deck says — LAMMPS decks can
-invoke shell commands (the `shell` command). Treat decks from others like
-scripts: read them before running them.
+**Running a LAMMPS input executes whatever the deck says.** LAMMPS decks are
+programs, not data — they can invoke arbitrary shell commands (LAMMPS has a
+literal `shell` command). Treat a deck from someone else exactly like a shell
+script: read it before running it.
+
+This applies doubly to the MCP server: **an AI agent connected to
+`mdengine-mcp` can submit decks, and a submitted deck runs with your user's
+full privileges on this machine.** That is the same trust model as any local
+dev tool (an agent that can run `make` can run anything), but be deliberate
+about which decks — and which agents — you hand to the job runner. Sandboxed
+execution (containers, no network, resource caps) is how a future hosted tier
+makes running untrusted decks safe; the local server does not sandbox.
 
 ## License
 
