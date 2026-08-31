@@ -38,8 +38,8 @@ func parseFrames(path: String) throws -> [[Arv]] {
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
         throw err("cannot read \(path)")
     }
-    let frames = XYZParser.parseFrames(text)
-    guard !frames.isEmpty else { throw err("no complete XYZ frames in \(path)") }
+    let frames = TrajectoryReader.parseFrames(text)
+    guard !frames.isEmpty else { throw err("no complete frames in \(path)") }
     return frames
 }
 
@@ -212,7 +212,7 @@ enum Jobs {
 
 let toolDefs: [[String: Any]] = [
     ["name": "trajectory_info",
-     "description": "Inspect an XYZ/extended-XYZ MD trajectory: frame count, atoms per frame, element histogram of the last frame, bounding box in Å.",
+     "description": "Inspect an MD trajectory (XYZ / extended-XYZ or native LAMMPS dump): frame count, atoms per frame, element histogram of the last frame, bounding box in Å.",
      "inputSchema": ["type": "object",
                      "properties": ["path": ["type": "string", "description": "Path to the trajectory file"]],
                      "required": ["path"]]],

@@ -21,7 +21,7 @@ USAGE
   mdengine gui                             open MDEngine.app
 
 NOTES
-  Trajectories are XYZ / extended-XYZ (count line, comment line, element x y z).
+  Trajectories are XYZ / extended-XYZ or native LAMMPS dump (ITEM: TIMESTEP).
   `run` finds LAMMPS via $MDENGINE_LMP, then lmp_mpi / lmp_serial / lmp on PATH.
   Default --threads = number of performance cores.
 """
@@ -105,8 +105,8 @@ switch command {
 
 case "info":
     guard let path = args.first else { fail("usage: mdengine info <file>") }
-    let frames = XYZParser.parseFrames(readTrajectory(path))
-    guard !frames.isEmpty else { fail("no complete XYZ frames found in \(path)") }
+    let frames = TrajectoryReader.parseFrames(readTrajectory(path))
+    guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
     print("file:    \(path)")
     print("frames:  \(frames.count)")
     let counts = frames.map(\.count)
@@ -132,8 +132,8 @@ case "export":
     args.removeFirst()
     let out = takeOption("-o", &args) ?? "frame.xyz"
     let which = takeOption("--frame", &args) ?? "last"
-    let frames = XYZParser.parseFrames(readTrajectory(path))
-    guard !frames.isEmpty else { fail("no complete XYZ frames found in \(path)") }
+    let frames = TrajectoryReader.parseFrames(readTrajectory(path))
+    guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
     let frame: [Arv]
     switch which {
     case "last": frame = frames.last!
@@ -158,8 +158,8 @@ case "decimate":
     }
     let out = takeOption("-o", &args)
         ?? (path as NSString).deletingPathExtension + ".every\(every).xyz"
-    let frames = XYZParser.parseFrames(readTrajectory(path))
-    guard !frames.isEmpty else { fail("no complete XYZ frames found in \(path)") }
+    let frames = TrajectoryReader.parseFrames(readTrajectory(path))
+    guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
     var kept = stride(from: 0, to: frames.count, by: every).map { frames[$0] }
     if (frames.count - 1) % every != 0 { kept.append(frames.last!) }  // always keep final state
     do {

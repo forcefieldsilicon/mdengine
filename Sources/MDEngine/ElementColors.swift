@@ -13,7 +13,27 @@ enum ElementColors {
         case "Ar": return SIMD3<Float>(0.50, 0.82, 0.89)
         case "Fe": return SIMD3<Float>(0.88, 0.40, 0.20)
         case "Cu": return SIMD3<Float>(0.78, 0.50, 0.20)
-        default:   return SIMD3<Float>(0.90, 0.90, 0.90)
+        default:
+            // Native dumps without an element column carry numeric type tokens;
+            // give each unknown token a stable, distinct colour.
+            var h: UInt32 = 2_166_136_261
+            for b in element.utf8 { h = (h ^ UInt32(b)) &* 16_777_619 }
+            let hue = Float(h % 360) / 360
+            return hsv(hue, 0.55, 0.88)
+        }
+    }
+
+    private static func hsv(_ h: Float, _ s: Float, _ v: Float) -> SIMD3<Float> {
+        let i = Int(h * 6) % 6
+        let f = h * 6 - Float(Int(h * 6))
+        let p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s)
+        switch i {
+        case 0: return SIMD3<Float>(v, t, p)
+        case 1: return SIMD3<Float>(q, v, p)
+        case 2: return SIMD3<Float>(p, v, t)
+        case 3: return SIMD3<Float>(p, q, v)
+        case 4: return SIMD3<Float>(t, p, v)
+        default: return SIMD3<Float>(v, p, q)
         }
     }
 

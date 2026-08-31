@@ -36,7 +36,7 @@ final class ContentViewModel: ObservableObject {
     /// File ▸ Load File…: open any XYZ / extended-XYZ trajectory from disk.
     func loadFilePanel() {
         let panel = NSOpenPanel()
-        panel.message = "Choose an XYZ / extended-XYZ trajectory or dump file"
+        panel.message = "Choose a trajectory: XYZ / extended-XYZ or native LAMMPS dump"
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -49,11 +49,11 @@ final class ContentViewModel: ObservableObject {
                        info: "The file could not be opened as text.")
             return
         }
-        let parsed = XYZParser.parseFrames(text)
+        let parsed = TrajectoryReader.parseFrames(text)
         guard !parsed.isEmpty else {
             Self.alert("No atoms found in \(url.lastPathComponent)",
-                       info: "MDEngine reads XYZ / extended-XYZ frames: a line with the atom "
-                           + "count, a comment line, then one `element x y z` row per atom. "
+                       info: "MDEngine reads XYZ / extended-XYZ and native LAMMPS dump files "
+                           + "(ITEM: TIMESTEP blocks from `dump atom`/`dump custom`). "
                            + "Trajectories open at their final frame — scrub with the timeline.")
             return
         }
