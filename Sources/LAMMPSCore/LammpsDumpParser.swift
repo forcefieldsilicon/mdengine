@@ -51,6 +51,7 @@ public enum LammpsDumpParser {
             let idCol = cols.firstIndex(of: "id")
             let elementCol = cols.firstIndex(of: "element")
             let typeCol = cols.firstIndex(of: "type")
+            let chargeCol = col(["q", "charge"])
 
             guard (xDirect ?? xScaled) != nil, (yDirect ?? yScaled) != nil,
                   (zDirect ?? zScaled) != nil, i + count <= lines.count else { break }
@@ -70,7 +71,8 @@ public enum LammpsDumpParser {
                 }
                 guard let x = coord(direct: xDirect, scaled: xScaled, axis: 0),
                       let y = coord(direct: yDirect, scaled: yScaled, axis: 1),
-                      let z = coord(direct: zDirect, scaled: zScaled, axis: 2) else { continue }
+                      let z = coord(direct: zDirect, scaled: zScaled, axis: 2),
+                      x.isFinite, y.isFinite, z.isFinite else { continue }  // drop corrupt/NaN rows
                 let element: String
                 if let e = elementCol, e < p.count {
                     element = String(p[e])
@@ -80,7 +82,7 @@ public enum LammpsDumpParser {
                     element = "?"
                 }
                 let id = value(idCol).map(Int.init) ?? rows.count
-                rows.append((id, Arv(element: element, x: x, y: y, z: z)))
+                rows.append((id, Arv(element: element, x: x, y: y, z: z, charge: value(chargeCol))))
             }
             rows.sort { $0.id < $1.id }   // dumps are unordered; keep atom identity stable
             frames.append(rows.map(\.atom))
@@ -94,9 +96,43 @@ public enum LammpsDumpParser {
 /// native-dump or XYZ parser.
 public enum TrajectoryReader {
     public static func parseFrames(_ text: String) -> [[Arv]] {
-        if text.prefix(2048).contains("ITEM: TIMESTEP") {
+        if isNativeDump(text) {
             return LammpsDumpParser.parseFrames(text)
         }
         return XYZParser.parseFrames(text)
+    }
+
+    public static func isNativeDump(_ text: String) -> Bool {
+        text.prefix(2048).contains("ITEM: TIMESTEP")
+    }
+
+    /// Column names of a native dump's per-atom section (first frame's
+    /// `ITEM: ATOMS ...` header); nil for XYZ input.
+    public static func dumpFields(_ text: String) -> [String]? {
+        guard isNativeDump(text) else { return nil }
+        for line in text.split(separator: "\n").prefix(64) where line.hasPrefix("ITEM: ATOMS") {
+            return line.split(separator: " ").dropFirst(2).map(String.init)
+        }
+        return nil
+    }
+}
+
+/// Writes frames back out as XYZ / extended-XYZ.
+public enum TrajectoryWriter {
+    /// Plain XYZ, or — with `charges: true` — extended-XYZ whose comment line
+    /// declares `Properties=species:S:1:pos:R:3:charge:R:1` and whose rows
+    /// carry the per-atom charge as a fifth column (0 when unknown).
+    public static func xyz(_ frames: [[Arv]], comment: String, charges: Bool = false) -> String {
+        var out = ""
+        for frame in frames {
+            out += "\(frame.count)\n"
+            out += charges ? "Properties=species:S:1:pos:R:3:charge:R:1 \(comment)\n" : "\(comment)\n"
+            for a in frame {
+                out += charges
+                    ? "\(a.element) \(a.x) \(a.y) \(a.z) \(a.charge ?? 0)\n"
+                    : "\(a.element) \(a.x) \(a.y) \(a.z)\n"
+            }
+        }
+        return out
     }
 }

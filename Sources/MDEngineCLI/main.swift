@@ -11,10 +11,12 @@ let usage = """
 mdengine — MD trajectory tool (CLI companion to MDEngine.app)
 
 USAGE
-  mdengine info <file>                     frames, atoms, elements, bounding box
+  mdengine info <file> [--elements A,B,..] frames, atoms, fields, elements, bbox
   mdengine export <file> [-o out.xyz] [--frame last|first|N]
-                                           write one frame as plain XYZ
-  mdengine decimate <file> --every N [-o out.xyz]
+                         [--charges] [--elements A,B,..]
+                                           write one frame as XYZ (--charges:
+                                           extended-XYZ with per-atom q column)
+  mdengine decimate <file> --every N [-o out.xyz] [--charges]
                                            keep every Nth frame (last always kept)
   mdengine run <input> [--threads N] [--lmp PATH] [--log FILE]
                                            run LAMMPS with -sf omp -pk omp N
@@ -22,6 +24,10 @@ USAGE
 
 NOTES
   Trajectories are XYZ / extended-XYZ or native LAMMPS dump (ITEM: TIMESTEP).
+  --elements maps numeric type tokens to symbols by position: --elements O,Al
+  labels type 1 as O and type 2 as Al.
+  Rows with non-finite (NaN/inf) coordinates are dropped.
+  Every subcommand accepts -h/--help.
   `run` finds LAMMPS via $MDENGINE_LMP, then lmp_mpi / lmp_serial / lmp on PATH.
   Default --threads = number of performance cores.
 """
@@ -38,13 +44,23 @@ func readTrajectory(_ path: String) -> String {
     return text
 }
 
-func xyzText(_ frames: [[Arv]], comment: String) -> String {
-    var out = ""
-    for frame in frames {
-        out += "\(frame.count)\n\(comment)\n"
-        for a in frame { out += "\(a.element) \(a.x) \(a.y) \(a.z)\n" }
+/// True if `flag` present in args, removing it.
+func takeFlag(_ flag: String, _ args: inout [String]) -> Bool {
+    guard let i = args.firstIndex(of: flag) else { return false }
+    args.remove(at: i)
+    return true
+}
+
+/// Map numeric type tokens to element symbols per `--elements A,B,...` (1-based).
+func applyElementMap(_ frames: [[Arv]], _ args: inout [String]) -> [[Arv]] {
+    guard let spec = takeOption("--elements", &args) else { return frames }
+    let symbols = spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+    return frames.map { frame in
+        frame.map { a in
+            guard let t = Int(a.element), t >= 1, t <= symbols.count else { return a }
+            return Arv(element: symbols[t - 1], x: a.x, y: a.y, z: a.z, charge: a.charge)
+        }
     }
-    return out
 }
 
 /// Value of `--flag v` in args, removing both tokens.
@@ -101,14 +117,26 @@ guard let command = args.first else {
 }
 args.removeFirst()
 
+// `mdengine <cmd> -h/--help` prints usage instead of treating the flag as a file.
+if args.contains("-h") || args.contains("--help") {
+    print(usage)
+    exit(0)
+}
+
 switch command {
 
 case "info":
-    guard let path = args.first else { fail("usage: mdengine info <file>") }
-    let frames = TrajectoryReader.parseFrames(readTrajectory(path))
+    guard let path = args.first else { fail("usage: mdengine info <file> [--elements A,B,..]") }
+    args.removeFirst()
+    let text = readTrajectory(path)
+    var frames = TrajectoryReader.parseFrames(text)
     guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
+    frames = applyElementMap(frames, &args)
     print("file:    \(path)")
     print("frames:  \(frames.count)")
+    if let fields = TrajectoryReader.dumpFields(text) {
+        print("fields:  \(fields.joined(separator: " "))")
+    }
     let counts = frames.map(\.count)
     if Set(counts).count == 1 {
         print("atoms:   \(counts[0]) per frame")
@@ -126,14 +154,20 @@ case "info":
         String(format: "%.2f…%.2f", v.min()!, v.max()!)
     }
     print("bbox (Å): x \(span(xs)) | y \(span(ys)) | z \(span(zs))")
+    if last.contains(where: { $0.charge != nil }) {
+        let qs = last.compactMap(\.charge)
+        print("charges: present (q \(span(qs)))")
+    }
 
 case "export":
     guard let path = args.first else { fail("usage: mdengine export <file> [-o out] [--frame N]") }
     args.removeFirst()
     let out = takeOption("-o", &args) ?? "frame.xyz"
     let which = takeOption("--frame", &args) ?? "last"
-    let frames = TrajectoryReader.parseFrames(readTrajectory(path))
+    let charges = takeFlag("--charges", &args)
+    var frames = TrajectoryReader.parseFrames(readTrajectory(path))
     guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
+    frames = applyElementMap(frames, &args)
     let frame: [Arv]
     switch which {
     case "last": frame = frames.last!
@@ -145,9 +179,9 @@ case "export":
         frame = frames[n]
     }
     do {
-        try xyzText([frame], comment: "Exported from mdengine — \(path) frame \(which)")
+        try TrajectoryWriter.xyz([frame], comment: "Exported from mdengine — \(path) frame \(which)", charges: charges)
             .write(toFile: out, atomically: true, encoding: .utf8)
-        print("wrote \(frame.count) atoms → \(out)")
+        print("wrote \(frame.count) atoms → \(out)\(charges ? " (extended-XYZ with charges)" : "")")
     } catch { fail("write failed: \(error.localizedDescription)") }
 
 case "decimate":
@@ -158,12 +192,13 @@ case "decimate":
     }
     let out = takeOption("-o", &args)
         ?? (path as NSString).deletingPathExtension + ".every\(every).xyz"
+    let charges = takeFlag("--charges", &args)
     let frames = TrajectoryReader.parseFrames(readTrajectory(path))
     guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
     var kept = stride(from: 0, to: frames.count, by: every).map { frames[$0] }
     if (frames.count - 1) % every != 0 { kept.append(frames.last!) }  // always keep final state
     do {
-        try xyzText(kept, comment: "Decimated 1/\(every) from \(path)")
+        try TrajectoryWriter.xyz(kept, comment: "Decimated 1/\(every) from \(path)", charges: charges)
             .write(toFile: out, atomically: true, encoding: .utf8)
         print("kept \(kept.count)/\(frames.count) frames → \(out)")
     } catch { fail("write failed: \(error.localizedDescription)") }

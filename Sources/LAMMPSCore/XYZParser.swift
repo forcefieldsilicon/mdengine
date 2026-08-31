@@ -49,7 +49,8 @@ public enum XYZParser {
                 guard parts.count >= 4,
                       let x = Double(parts[1]),
                       let y = Double(parts[2]),
-                      let z = Double(parts[3]) else { continue }
+                      let z = Double(parts[3]),
+                      x.isFinite, y.isFinite, z.isFinite else { continue }
                 frame.append(Arv(element: String(parts[0]), x: x, y: y, z: z))
             }
 

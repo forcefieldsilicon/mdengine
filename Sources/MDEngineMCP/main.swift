@@ -34,22 +34,17 @@ func err(_ message: String) -> NSError {
 
 // MARK: - Shared helpers
 
-func parseFrames(path: String) throws -> [[Arv]] {
+func readText(path: String) throws -> String {
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
         throw err("cannot read \(path)")
     }
-    let frames = TrajectoryReader.parseFrames(text)
-    guard !frames.isEmpty else { throw err("no complete frames in \(path)") }
-    return frames
+    return text
 }
 
-func xyzText(_ frames: [[Arv]], comment: String) -> String {
-    var out = ""
-    for frame in frames {
-        out += "\(frame.count)\n\(comment)\n"
-        for a in frame { out += "\(a.element) \(a.x) \(a.y) \(a.z)\n" }
-    }
-    return out
+func parseFrames(path: String) throws -> [[Arv]] {
+    let frames = TrajectoryReader.parseFrames(try readText(path: path))
+    guard !frames.isEmpty else { throw err("no complete frames in \(path)") }
+    return frames
 }
 
 func performanceCores() -> Int {
@@ -221,7 +216,8 @@ let toolDefs: [[String: Any]] = [
      "inputSchema": ["type": "object",
                      "properties": ["path": ["type": "string"],
                                     "out": ["type": "string", "description": "Output file path"],
-                                    "frame": ["type": "string", "description": "'first', 'last' (default), or a 0-based index"]],
+                                    "frame": ["type": "string", "description": "'first', 'last' (default), or a 0-based index"],
+                                    "charges": ["type": "boolean", "description": "Write extended-XYZ with per-atom charge (q) column"]],
                      "required": ["path", "out"]]],
     ["name": "decimate",
      "description": "Keep every Nth frame of a trajectory (the final frame is always kept). Use to shrink huge trajectories before viewing.",
@@ -281,13 +277,16 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
         func span(_ v: [Double]) -> String { String(format: "%.2f…%.2f", v.min()!, v.max()!) }
         let atoms = Set(counts).count == 1 ? "\(counts[0]) per frame"
             : "varies \(counts.min()!)–\(counts.max()!) (first \(counts.first!), last \(counts.last!))"
+        let fields = TrajectoryReader.dumpFields((try? readText(path: path)) ?? "")
+            .map { "\nfields: \($0.joined(separator: " "))" } ?? ""
+        let charges = last.contains(where: { $0.charge != nil }) ? "\ncharges: present (q)" : ""
         return """
         file: \(path)
         frames: \(frames.count)
         atoms: \(atoms)
         last frame elements: \(elements)
         bbox (Å): x \(span(xs)) | y \(span(ys)) | z \(span(zs))
-        """
+        """ + fields + charges
 
     case "export_frame":
         guard let path = a["path"] as? String, let out = a["out"] as? String else {
@@ -305,9 +304,10 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
             }
             frame = frames[n]
         }
-        try xyzText([frame], comment: "Exported by mdengine-mcp — \(path) frame \(which)")
+        let charges = a["charges"] as? Bool ?? false
+        try TrajectoryWriter.xyz([frame], comment: "Exported by mdengine-mcp — \(path) frame \(which)", charges: charges)
             .write(toFile: out, atomically: true, encoding: .utf8)
-        return "wrote \(frame.count) atoms → \(out)"
+        return "wrote \(frame.count) atoms → \(out)\(charges ? " (extended-XYZ with charges)" : "")"
 
     case "decimate":
         guard let path = a["path"] as? String, let out = a["out"] as? String else {
@@ -317,7 +317,7 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
         let frames = try parseFrames(path: path)
         var kept = stride(from: 0, to: frames.count, by: every).map { frames[$0] }
         if (frames.count - 1) % every != 0 { kept.append(frames.last!) }
-        try xyzText(kept, comment: "Decimated 1/\(every) from \(path)")
+        try TrajectoryWriter.xyz(kept, comment: "Decimated 1/\(every) from \(path)")
             .write(toFile: out, atomically: true, encoding: .utf8)
         return "kept \(kept.count)/\(frames.count) frames → \(out)"
 
