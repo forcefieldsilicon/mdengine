@@ -26,6 +26,7 @@ struct ContentView: View {
                 .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
         }
         .onAppear {
+            AppDelegate.openHandler = { [weak model] url in model?.load(url: url) }
             model.runSimulationAndDisplayResults()
         }
     }

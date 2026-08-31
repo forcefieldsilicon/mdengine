@@ -1,9 +1,27 @@
 import SwiftUI
 import AppKit
 
+/// Receives Finder open-document events (double-clicked trajectories).
+/// Files can arrive before SwiftUI has a view up, so URLs are buffered until
+/// ContentView installs the handler.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var openHandler: ((URL) -> Void)? {
+        didSet { pending.forEach { openHandler?($0) }; pending.removeAll() }
+    }
+    private static var pending: [URL] = []
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            if let handler = AppDelegate.openHandler { handler(url) }
+            else { AppDelegate.pending.append(url) }
+        }
+    }
+}
+
 @main
 struct MDEngineApp: App {
     @StateObject private var model = ContentViewModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
         // Bare SwiftPM executables launch as background processes; promote to a

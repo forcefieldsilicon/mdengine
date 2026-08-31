@@ -46,9 +46,38 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>MD Trajectory</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>xyz</string>
+                <string>extxyz</string>
+                <string>lammpstrj</string>
+                <string>traj</string>
+                <string>dump</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
 
-codesign --force --deep -s - "$APP"
+# Signing: ad-hoc by default (runs on this machine only). For distribution,
+# set DEVELOPER_ID to a "Developer ID Application: ..." identity — and
+# NOTARY_PROFILE to a notarytool keychain profile to notarize + staple.
+if [ -n "${DEVELOPER_ID:-}" ]; then
+  codesign --force --options runtime --timestamp -s "$DEVELOPER_ID" "$APP"
+  if [ -n "${NOTARY_PROFILE:-}" ]; then
+    ZIP=$(mktemp -d)/MDEngine.zip
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$APP"
+  fi
+else
+  codesign --force --deep -s - "$APP"
+fi
 echo "installed: $APP"
