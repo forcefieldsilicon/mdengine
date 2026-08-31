@@ -81,29 +81,40 @@ final class ContentViewModel: ObservableObject {
     /// (the readers are safe on in-flight files) and extend the timeline in
     /// place — no re-loading by the user. Camera and scrub position are kept;
     /// if the user was at the final frame, follow the new final frame.
-    private func watch(url: URL) {
+    private func watch(url: URL, knownSize: Int) {
         watchTimer?.invalidate()
         watchedURL = url
-        watchedSize = fileSize(url)
+        watchedSize = knownSize
         isFollowingFile = true
-        watchTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // Poll slower for big files: a full re-parse costs time proportional
+        // to size, so the interval scales well past the parse cost
+        // (2s small, ~45s at 350MB) to avoid burning a core continuously.
+        let interval = max(2.0, Double(knownSize) / 8_000_000)
+        watchTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.refreshFromWatchedFile()
         }
     }
 
     private func refreshFromWatchedFile() {
-        guard let url = watchedURL else { return }
+        guard let url = watchedURL, !refreshInFlight else { return }
         let size = fileSize(url)
-        guard size != watchedSize else { return }
+        guard size != watchedSize, size < 1_000_000_000 else { return }
         watchedSize = size
-        guard size < 512_000_000 else { return }   // don't re-parse huge files every tick
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        let parsed = TrajectoryReader.parseFrames(text)
-        guard parsed.count != frames.count, !parsed.isEmpty else { return }
-        let wasAtEnd = frameIndex >= frames.count - 1
-        frames = parsed
-        generation += 1
-        frameIndex = wasAtEnd ? parsed.count - 1 : min(frameIndex, parsed.count - 1)
+        refreshInFlight = true
+        parseQueue.async { [weak self] in
+            let text = try? String(contentsOf: url, encoding: .utf8)
+            let parsed = text.map(TrajectoryReader.parseFrames) ?? []
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.refreshInFlight = false
+                guard self.watchedURL == url,                    // not replaced meanwhile
+                      parsed.count != self.frames.count, !parsed.isEmpty else { return }
+                let wasAtEnd = self.frameIndex >= self.frames.count - 1
+                self.frames = parsed
+                self.generation += 1
+                self.frameIndex = wasAtEnd ? parsed.count - 1 : min(self.frameIndex, parsed.count - 1)
+            }
+        }
     }
 
     private func fileSize(_ url: URL) -> Int {
@@ -122,23 +133,44 @@ final class ContentViewModel: ObservableObject {
         load(url: url)
     }
 
+    /// Parsing happens OFF the main thread — large trajectories must never
+    /// beachball the app (a 343MB in-flight dump did exactly that once).
     func load(url: URL) {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-            Self.alert("Could not read \(url.lastPathComponent)",
-                       info: "The file could not be opened as text.")
+        let size = fileSize(url)
+        guard size < 2_000_000_000 else {
+            Self.alert("\(url.lastPathComponent) is \(size / 1_000_000) MB",
+                       info: "MDEngine loads whole trajectories into memory (limit 2 GB). "
+                           + "Shrink it first: mdengine decimate <file> --every N")
             return
         }
-        let parsed = TrajectoryReader.parseFrames(text)
-        guard !parsed.isEmpty else {
-            Self.alert("No atoms found in \(url.lastPathComponent)",
-                       info: "MDEngine reads XYZ / extended-XYZ and native LAMMPS dump files "
-                           + "(ITEM: TIMESTEP blocks from `dump atom`/`dump custom`). "
-                           + "Trajectories open at their final frame — scrub with the timeline.")
-            return
+        sourceName = "Loading \(url.lastPathComponent)…"
+        parseQueue.async { [weak self] in
+            let text = try? String(contentsOf: url, encoding: .utf8)
+            let parsed = text.map(TrajectoryReader.parseFrames) ?? []
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard text != nil else {
+                    self.sourceName = ""
+                    Self.alert("Could not read \(url.lastPathComponent)",
+                               info: "The file could not be opened as text.")
+                    return
+                }
+                guard !parsed.isEmpty else {
+                    self.sourceName = ""
+                    Self.alert("No atoms found in \(url.lastPathComponent)",
+                               info: "MDEngine reads XYZ / extended-XYZ and native LAMMPS dump files "
+                                   + "(ITEM: TIMESTEP blocks from `dump atom`/`dump custom`). "
+                                   + "Trajectories open at their final frame — scrub with the timeline.")
+                    return
+                }
+                self.show(parsed, name: url.lastPathComponent)
+                self.watch(url: url, knownSize: size)
+            }
         }
-        show(parsed, name: url.lastPathComponent)
-        watch(url: url)
     }
+
+    private let parseQueue = DispatchQueue(label: "mdengine.parse", qos: .userInitiated)
+    private var refreshInFlight = false
 
     /// File ▸ Export File…: write the displayed frame back out as XYZ.
     func exportFilePanel() {

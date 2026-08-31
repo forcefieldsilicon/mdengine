@@ -8,9 +8,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
     private let depthState: MTLDepthStencilState
-    // Trajectory: per-frame GPU atom arrays share one normalization (union
-    // bounding box) so the camera scale is stable while scrubbing.
-    private var frames: [[GPUAtom]] = []
+    // Trajectory: frames share one normalization (union bounding box) so the
+    // camera scale is stable while scrubbing. GPU atom arrays are built
+    // per-frame on demand — precomputing all frames of a long trajectory
+    // costs hundreds of MB for nothing.
+    private var frames: [[Arv]] = []
+    private var center = SIMD3<Float>(0, 0, 0)
+    private var scale: Float = 1
     private var frameBuffers: [Int: MTLBuffer] = [:]
     private var cacheBuffers = true
     private var currentFrame = 0
@@ -89,19 +93,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 maxP = max(maxP, p)
             }
         }
-        let center = (minP + maxP) * 0.5
         let extent = maxP - minP
         let maxExtent = max(extent.x, max(extent.y, extent.z))
+        frames = trajectory
+        center = (minP + maxP) * 0.5
         // Uniform scale preserves aspect ratio; 1.8 leaves a small margin.
-        let scale: Float = maxExtent > 0 ? 1.8 / maxExtent : 1.0
-
-        frames = trajectory.map { frame in
-            frame.map { a in
-                let p = SIMD3<Float>(Float(a.x), Float(a.y), Float(a.z))
-                return GPUAtom(position: (p - center) * scale,
-                               color: ElementColors.rgb(for: a.element))
-            }
-        }
+        scale = maxExtent > 0 ? 1.8 / maxExtent : 1.0
         // Cache per-frame buffers only while the whole trajectory fits well
         // under GPU memory; otherwise rebuild the buffer on each frame change.
         cacheBuffers = totalAtoms * MemoryLayout<GPUAtom>.stride < 512 << 20
@@ -118,7 +115,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             atomCount = frames[i].count
             return
         }
-        let gpuAtoms = frames[i]
+        let gpuAtoms: [GPUAtom] = frames[i].map { a in
+            let p = SIMD3<Float>(Float(a.x), Float(a.y), Float(a.z))
+            return GPUAtom(position: (p - center) * scale,
+                           color: ElementColors.rgb(for: a.element))
+        }
         atomCount = gpuAtoms.count
         atomBuffer = gpuAtoms.isEmpty ? nil
             : device.makeBuffer(bytes: gpuAtoms,

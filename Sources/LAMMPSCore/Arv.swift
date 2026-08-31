@@ -1,7 +1,6 @@
 import Foundation
 
-public struct Arv: Identifiable {
-    public let id = UUID()
+public struct Arv {
     public let element: String
     public let x: Double
     public let y: Double
