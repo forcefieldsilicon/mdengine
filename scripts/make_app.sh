@@ -40,8 +40,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>MDEngine</string>
     <key>CFBundleDisplayName</key><string>MDEngine</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.4.0</string>
-    <key>CFBundleVersion</key><string>4</string>
+    <key>CFBundleShortVersionString</key><string>0.5.0</string>
+    <key>CFBundleVersion</key><string>5</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>

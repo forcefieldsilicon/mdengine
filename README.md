@@ -44,16 +44,37 @@ MDEngine derives it from the LAMMPS install.
 
 ## MCP server
 
-Register with Claude Code:
+`mdengine-mcp` is a dependency-free MCP stdio server. Register with Claude Code:
 
 ```sh
 claude mcp add mdengine /path/to/.build/release/mdengine-mcp
 ```
 
-Submitted jobs are wrapped in `caffeinate -i`, run in the deck's own directory
-(relative `read_data` paths work), survive the server exiting, and record
-their exit code unattended under `~/.mdengine/jobs/`. LAMMPS runs launch with
-`-sf omp -pk omp N` so the OPENMP package is actually engaged.
+or in Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "mdengine": { "command": "/path/to/.build/release/mdengine-mcp" } } }
+```
+
+| Tool | Does |
+|---|---|
+| `trajectory_info` | Frames, atom counts, per-atom fields, elements, bbox, charge range |
+| `export_frame` | One frame → XYZ; `charges: true` → extended-XYZ with the q column |
+| `decimate` | Keep every Nth frame (final frame always kept) |
+| `submit_lammps` | Detached LAMMPS job: survives the server exiting and machine display-sleep (`caffeinate`), exit code recorded unattended |
+| `job_status` / `job_log` | State + live thermo tail / raw log tail |
+| `job_files` | Locate a finished job's outputs (run dir + bookkeeping dir) |
+| `list_jobs` / `cancel_job` | Registry under `~/.mdengine/jobs/` / SIGTERM a run |
+| `run_lammps` | Synchronous run for short tests only |
+
+Jobs run in the deck's own directory (relative `read_data` paths work) and
+launch with `-sf omp -pk omp N` so the OPENMP package is actually engaged;
+`$LAMMPS_POTENTIALS` is derived from the LAMMPS install when unset.
+
+## Platform & limits
+
+macOS 14+ (Apple Silicon or Intel). Trajectories are loaded whole into memory
+— files over 2 GB are refused with guidance to decimate or split first.
 
 ## Security note
 

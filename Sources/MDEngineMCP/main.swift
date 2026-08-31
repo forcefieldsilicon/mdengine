@@ -35,6 +35,12 @@ func err(_ message: String) -> NSError {
 // MARK: - Shared helpers
 
 func readText(path: String) throws -> String {
+    // Trajectories are loaded whole; refuse sizes that would thrash the machine.
+    if let bytes = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int,
+       bytes > 2_000_000_000 {
+        throw err("\(path) is \(bytes / 1_000_000) MB — mdengine loads whole trajectories "
+                + "into memory (limit 2 GB). Decimate or split the file first.")
+    }
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
         throw err("cannot read \(path)")
     }
@@ -247,6 +253,11 @@ let toolDefs: [[String: Any]] = [
     ["name": "list_jobs",
      "description": "List all submitted LAMMPS jobs and their states.",
      "inputSchema": ["type": "object", "properties": [String: Any]()]],
+    ["name": "job_files",
+     "description": "List the files a job produced: contents of its run directory (where dumps/logs land per the deck) and its bookkeeping dir, with sizes. Use after job_status says done to locate the output trajectory.",
+     "inputSchema": ["type": "object",
+                     "properties": ["job_id": ["type": "string"]],
+                     "required": ["job_id"]]],
     ["name": "cancel_job",
      "description": "Terminate a running job (SIGTERM to LAMMPS and its wrapper).",
      "inputSchema": ["type": "object",
@@ -352,6 +363,24 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
     case "list_jobs":
         return Jobs.list()
 
+    case "job_files":
+        guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
+        guard let meta = Jobs.meta(id) else { throw err("unknown job \(id)") }
+        func listing(_ dir: String, label: String) -> String {
+            let fm = FileManager.default
+            guard let names = try? fm.contentsOfDirectory(atPath: dir), !names.isEmpty else {
+                return "\(label): (empty)"
+            }
+            let rows = names.sorted().prefix(200).map { name -> String in
+                let size = ((try? fm.attributesOfItem(atPath: dir + "/" + name))?[.size] as? Int) ?? 0
+                return "  \(name)  \(size) bytes"
+            }
+            return "\(label): \(dir)\n" + rows.joined(separator: "\n")
+        }
+        let cwd = meta["cwd"] as? String ?? "?"
+        return listing(cwd, label: "run directory") + "\n"
+             + listing(Jobs.dir(id).path, label: "job bookkeeping")
+
     case "cancel_job":
         guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
         return try Jobs.cancel(id)
@@ -403,7 +432,7 @@ while let line = readLine(strippingNewline: true) {
         let version = params?["protocolVersion"] as? String ?? "2025-06-18"
         reply(id, ["protocolVersion": version,
                    "capabilities": ["tools": [String: Any]()],
-                   "serverInfo": ["name": "mdengine", "version": "0.4.0"]])
+                   "serverInfo": ["name": "mdengine", "version": "0.5.0"]])
     case "ping":
         reply(id, [:])
     case "tools/list":

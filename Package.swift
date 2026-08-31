@@ -54,8 +54,8 @@ let package = Package(
             dependencies: ["LAMMPSCore"]
         ),
         .testTarget(
-            name: "LAMMPSAppTests",
-            dependencies: ["MDEngine", "LAMMPSCore"]
+            name: "AppTests",
+            dependencies: ["LAMMPSCore"]
         ),
     ]
 )

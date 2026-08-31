@@ -39,6 +39,12 @@ func fail(_ msg: String) -> Never {
 }
 
 func readTrajectory(_ path: String) -> String {
+    // Trajectories are loaded whole; refuse sizes that would thrash the machine.
+    if let bytes = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int,
+       bytes > 2_000_000_000 {
+        fail("\(path) is \(bytes / 1_000_000) MB — mdengine loads whole trajectories "
+           + "into memory (limit 2 GB). Decimate or split the file first.")
+    }
     guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
         fail("cannot read \(path)")
     }
