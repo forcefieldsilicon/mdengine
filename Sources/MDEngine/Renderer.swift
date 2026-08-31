@@ -171,12 +171,23 @@ final class Renderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
-        guard atomCount > 0,
-              let atomBuffer = atomBuffer,
-              let drawable = view.currentDrawable,
+        // Always encode a pass, even with no atoms: an early return would leave
+        // the view never painted (window background shows through), which reads
+        // as a broken blank window instead of an intentional empty scene.
+        guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+
+        let bgBrightness = Double(Renderer.pref("backgroundBrightness", default: 0.05))
+        view.clearColor = MTLClearColorMake(bgBrightness, bgBrightness, bgBrightness + 0.03, 1.0)
+
+        guard atomCount > 0, let atomBuffer = atomBuffer else {
+            encoder.endEncoding()
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
+            return
+        }
 
         let size = view.drawableSize
         let aspect = size.height > 0 ? Float(size.width / size.height) : 1
@@ -198,8 +209,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         var uniforms = Uniforms(mvp: projection * viewMatrix,
                                 pointSize: orthographic ? baseSize / distance : baseSize)
 
-        let bg = Double(Renderer.pref("backgroundBrightness", default: 0.05))
-        view.clearColor = MTLClearColorMake(bg, bg, bg + 0.03, 1.0)
 
         encoder.setRenderPipelineState(pipelineState)
         encoder.setDepthStencilState(depthState)

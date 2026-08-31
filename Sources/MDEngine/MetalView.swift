@@ -63,6 +63,12 @@ struct MetalView: NSViewRepresentable {
         view.renderer = renderer
 
         context.coordinator.renderer = renderer
+        // AppKit can destroy and recreate this NSView (window restoration,
+        // re-hosting) while the SAME coordinator survives. A fresh renderer
+        // with a stale generation counter would never receive the trajectory
+        // and render blank forever - reset so the next update re-uploads.
+        context.coordinator.generation = -1
+        context.coordinator.cameraResetToken = cameraResetToken
         return view
     }
 
