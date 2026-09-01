@@ -38,11 +38,19 @@ struct InspectorView: View {
     var body: some View {
         Form {
             CollapsibleSection("View", key: "inspExpView", initiallyExpanded: true) {
-                Picker("Projection", selection: $orthographic) {
-                    Text("Perspective").tag(false)
-                    Text("Orthographic").tag(true)
+                ZStack {
+                    HStack {
+                        Text("Projection")
+                        Spacer()
+                    }
+                    Picker("", selection: $orthographic) {
+                        Text("Persp.").tag(false)
+                        Text("Ortho.").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 137)   // matches the Panes indicator below
                 }
-                .pickerStyle(.segmented)
                 ZStack {
                     HStack {
                         Text("Panes")
@@ -52,13 +60,18 @@ struct InspectorView: View {
                     // selecting 3 lights 1-2-3, not just the 3.
                     HStack(spacing: 3) {
                         ForEach(1...4, id: \.self) { i in
-                            Button("\(i)") { paneCount = i }
-                                .buttonStyle(.plain)
-                                .frame(width: 32, height: 22)
-                                .background(i <= paneCount ? Color.accentColor
-                                                           : Color.secondary.opacity(0.18),
-                                            in: RoundedRectangle(cornerRadius: 5))
-                                .foregroundColor(i <= paneCount ? .white : .primary)
+                            Button {
+                                paneCount = i
+                            } label: {
+                                Text("\(i)")
+                                    .frame(width: 32, height: 22)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .background(i <= paneCount ? Color.accentColor
+                                                       : Color.secondary.opacity(0.18),
+                                        in: RoundedRectangle(cornerRadius: 5))
+                            .foregroundColor(i <= paneCount ? .white : .primary)
                         }
                     }
                     .help("Viewport layout: 1 = main pane only, up to a 2×2 grid. Hidden panes remember their views.")
@@ -112,14 +125,14 @@ struct InspectorView: View {
                 LabeledContent("Atom size") {
                     Slider(value: $atomPointSize, in: 4...32)
                 }
-                LabeledContent("Background") {
-                    HStack {
-                        ColorPicker("", selection: $backgroundColor, supportsOpacity: false)
-                            .labelsHidden()
-                            .frame(width: 28)
-                            .help("Background hue — the slider sets its brightness")
-                        Slider(value: $backgroundBrightness, in: 0...0.35)
-                    }
+                LabeledContent("Brightness") {
+                    Slider(value: $backgroundBrightness, in: 0...0.35)
+                }
+                LabeledContent("Background color") {
+                    ColorPicker("", selection: $backgroundColor, supportsOpacity: false)
+                        .labelsHidden()
+                        .frame(width: 44, alignment: .trailing)
+                        .help("Background hue — Brightness sets how bright it is")
                 }
                 .onChange(of: backgroundColor) { c in
                     let n = NSColor(c).usingColorSpace(.sRGB) ?? .black
@@ -146,7 +159,7 @@ struct InspectorView: View {
                     ForEach(histogram.indices, id: \.self) { i in
                         ElementRow(model: model,
                                    element: histogram[i].0, count: histogram[i].1)
-                            .id("\(histogram[i].0)-\(model.styleGeneration)")
+                            .id("\(histogram[i].0)-\(model.styleResetToken)")
                     }
                 }
             }
@@ -210,6 +223,7 @@ struct InspectorView: View {
                     model.cameraResetToken += 1   // isometric + home zoom + centered
                     ElementStyleStore.reset(elements: elementNames)
                     model.styleGeneration += 1
+                    model.styleResetToken += 1
                     orthographic = false
                     atomPointSize = 14
                     orbitSensitivity = 8
@@ -266,18 +280,25 @@ struct InspectorView: View {
                                          substrate: zSubstrate, probe: zProbe) {
                 LabeledContent("Surface plane") { Text(String(format: "z = %.1f Å", zp.surfaceZ)).monospacedDigit() }
                 LabeledContent("Penetrated") { Text("\(zp.penetrations.count)").monospacedDigit() }
-                if let maxP = zp.maxPenetration, let minP = zp.minPenetration, let meanP = zp.meanPenetration {
-                    LabeledContent("Depth (Å)") {
-                        Text(String(format: "%.2f · %.2f · %.2f Å", minP, meanP, maxP))
+                LabeledContent("Depth (Å)") {
+                    if let maxP = zp.maxPenetration, let minP = zp.minPenetration,
+                       let meanP = zp.meanPenetration {
+                        Text(String(format: "%.2f · %.2f · %.2f", minP, meanP, maxP))
                             .monospacedDigit()
+                    } else {
+                        Text("—").foregroundColor(.secondary)
                     }
                 }
                 LabeledContent("At surface (≤\(String(format: "%.1f", ZProfileAnalysis.surfaceBand)) Å)") {
                     Text("\(zp.atSurfaceCount)").monospacedDigit()
                 }
                 LabeledContent("Above / in flight") { Text("\(zp.aboveCount)").monospacedDigit() }
-                if let q = zp.boundProbeMeanCharge {
-                    LabeledContent("Bound probe ⟨q⟩") { Text(String(format: "%+.2f e", q)).monospacedDigit() }
+                LabeledContent("Bound probe ⟨q⟩") {
+                    if let q = zp.boundProbeMeanCharge {
+                        Text(String(format: "%+.2f e", q)).monospacedDigit()
+                    } else {
+                        Text("—").foregroundColor(.secondary)
+                    }
                 }
                 zHistogram(zp)
             } else if zSubstrate == zProbe {

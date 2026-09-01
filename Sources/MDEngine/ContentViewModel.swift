@@ -94,6 +94,11 @@ final class ContentViewModel: ObservableObject {
     /// Bumped when per-element colors/sizes change (inspector edits).
     @Published var styleGeneration = 0
 
+    /// Bumped only by Restore Defaults: forces element rows to rebuild with
+    /// factory values. Kept separate from styleGeneration — recreating a row
+    /// mid-edit would orphan an open color picker's binding.
+    @Published var styleResetToken = 0
+
     /// nil = idle; 0…1 while an export runs (drives the inspector progress bar).
     @Published var exportProgress: Double?
     private var exportCancelled = false
