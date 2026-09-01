@@ -311,37 +311,56 @@ private struct PaneGroup: View {
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            Picker("View", selection: $preset) {
-                Text("Free").tag("free")
-                ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
-                    Text($0.label).tag($0.rawValue)
+        // An OFF pane is a single plain row (name + switch) — its view picker
+        // only appears once the pane is on, so the panel stays uncluttered.
+        Group {
+            if isMain || enabled {
+                DisclosureGroup(isExpanded: $expanded) {
+                    viewPicker
+                } label: {
+                    headerRow(expandsOnTap: true)
                 }
+            } else {
+                headerRow(expandsOnTap: false)
             }
-            .onChange(of: preset) { value in
-                if isMain, let p = RenderCore.ViewPreset(rawValue: value) {
-                    model.applyViewPreset(p)
-                }
+        }
+        .onChange(of: enabled) { on in
+            withAnimation { expanded = on }   // reveal the picker right away
+        }
+    }
+
+    private var viewPicker: some View {
+        Picker("View", selection: $preset) {
+            Text("Free").tag("free")
+            ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
+                Text($0.label).tag($0.rawValue)
             }
-            .disabled(!isMain && !enabled)
-        } label: {
-            // On/off lives in the header row — no need to expand to toggle.
+        }
+        .onChange(of: preset) { value in
+            if isMain, let p = RenderCore.ViewPreset(rawValue: value) {
+                model.applyViewPreset(p)
+            }
+        }
+    }
+
+    private func headerRow(expandsOnTap: Bool) -> some View {
+        HStack {
             HStack {
-                HStack {
-                    Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
-                    Spacer()
-                    Text(statusText).foregroundColor(.secondary)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { withAnimation { expanded.toggle() } }
-                Toggle("", isOn: $enabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .disabled(isMain)
-                    .help(isMain ? "Pane 1 is the main viewport — always on"
-                                 : "Show this pane in the viewport grid")
+                Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
+                Spacer()
+                if expandsOnTap { Text(statusText).foregroundColor(.secondary) }
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if expandsOnTap { withAnimation { expanded.toggle() } }
+            }
+            Toggle("", isOn: $enabled)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .disabled(isMain)
+                .help(isMain ? "Pane 1 is the main viewport — always on"
+                             : "Show this pane in the viewport grid")
         }
     }
 
