@@ -311,10 +311,6 @@ private struct PaneGroup: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            Toggle("On", isOn: $enabled)
-                .disabled(isMain)
-                .help(isMain ? "Pane 1 is the main viewport — always on"
-                             : "Show this pane in the viewport grid")
             Picker("View", selection: $preset) {
                 Text("Free").tag("free")
                 ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
@@ -328,19 +324,27 @@ private struct PaneGroup: View {
             }
             .disabled(!isMain && !enabled)
         } label: {
+            // On/off lives in the header row — no need to expand to toggle.
             HStack {
-                Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
-                Spacer()
-                Text(statusText).foregroundColor(.secondary)
+                HStack {
+                    Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
+                    Spacer()
+                    Text(statusText).foregroundColor(.secondary)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation { expanded.toggle() } }
+                Toggle("", isOn: $enabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .disabled(isMain)
+                    .help(isMain ? "Pane 1 is the main viewport — always on"
+                                 : "Show this pane in the viewport grid")
             }
-            .contentShape(Rectangle())
-            .onTapGesture { withAnimation { expanded.toggle() } }
         }
     }
 
     private var statusText: String {
-        let view = RenderCore.ViewPreset(rawValue: preset)?.label ?? "Free"
-        if isMain { return view }
-        return enabled ? view : "Off"
+        RenderCore.ViewPreset(rawValue: preset)?.label ?? "Free"
     }
 }
