@@ -33,7 +33,7 @@ struct InspectorView: View {
 
     var body: some View {
         Form {
-            Section("View") {
+            CollapsibleSection("View", key: "inspExpView", initiallyExpanded: true) {
                 Picker("Projection", selection: $orthographic) {
                     Text("Perspective").tag(false)
                     Text("Orthographic").tag(true)
@@ -46,7 +46,7 @@ struct InspectorView: View {
                 panePicker("Pane 4", $pane4View)
             }
 
-            Section("Video export") {
+            CollapsibleSection("Video export", key: "inspExpVideo", initiallyExpanded: false) {
                 Picker("Resolution", selection: $videoHeight) {
                     Text("1080p").tag(1080)
                     Text("1440p").tag(1440)
@@ -90,7 +90,7 @@ struct InspectorView: View {
                 }
             }
 
-            Section("Timeline grid") {
+            CollapsibleSection("Timeline grid", key: "inspExpTimeline", initiallyExpanded: false) {
                 Picker("Major marks", selection: $timelineMajorPct) {
                     ForEach([10, 20, 25, 50], id: \.self) { Text("every \($0)%").tag($0) }
                 }
@@ -100,7 +100,7 @@ struct InspectorView: View {
                 Toggle("Frame numbers", isOn: $timelineShowNumbers)
             }
 
-            Section("Display") {
+            CollapsibleSection("Display", key: "inspExpDisplay", initiallyExpanded: false) {
                 LabeledContent("Atom size") {
                     Slider(value: $atomPointSize, in: 4...32)
                 }
@@ -109,14 +109,14 @@ struct InspectorView: View {
                 }
             }
 
-            Section("Camera") {
+            CollapsibleSection("Camera", key: "inspExpCamera", initiallyExpanded: false) {
                 LabeledContent("Orbit speed") {
                     Slider(value: $orbitSensitivity, in: 2...20)
                 }
                 Button("Reset Camera") { model.cameraResetToken += 1 }
             }
 
-            Section("Elements") {
+            CollapsibleSection("Elements", key: "inspExpElements", initiallyExpanded: true) {
                 let histogram = elementHistogram
                 if histogram.isEmpty {
                     Text("No atoms loaded").foregroundColor(.secondary)
@@ -132,7 +132,7 @@ struct InspectorView: View {
                 }
             }
 
-            Section("Z-profile") {
+            CollapsibleSection("Z-profile", key: "inspExpZProfile", initiallyExpanded: false) {
                 zProfileSection
             }
 
@@ -252,5 +252,30 @@ struct InspectorView: View {
         for a in model.atoms { histogram[a.element, default: 0] += 1 }
         return histogram.sorted { ($0.value, $1.key) > ($1.value, $0.key) }
             .map { ($0.key, $0.value) }
+    }
+}
+
+/// Inspector group that expands/collapses on click, with a visible chevron.
+/// Expansion state persists per section across launches.
+private struct CollapsibleSection<Content: View>: View {
+    private let title: String
+    @AppStorage private var expanded: Bool
+    @ViewBuilder private let content: () -> Content
+
+    init(_ title: String, key: String, initiallyExpanded: Bool = false,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        _expanded = AppStorage(wrappedValue: initiallyExpanded, key)
+        self.content = content
+    }
+
+    var body: some View {
+        Section {
+            DisclosureGroup(isExpanded: $expanded) {
+                content()
+            } label: {
+                Text(title).font(.headline)
+            }
+        }
     }
 }
