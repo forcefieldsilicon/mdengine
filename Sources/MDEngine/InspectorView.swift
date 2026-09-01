@@ -17,6 +17,7 @@ struct InspectorView: View {
     @AppStorage("timelineShowNumbers") private var timelineShowNumbers = true
     @AppStorage("orthographicProjection") private var orthographic = false
     @AppStorage("showScaleBar") private var showScaleBar = true
+    @AppStorage("pane1View") private var pane1View = "free"
     @AppStorage("pane2View") private var pane2View = "off"
     @AppStorage("pane3View") private var pane3View = "off"
     @AppStorage("pane4View") private var pane4View = "off"
@@ -41,6 +42,17 @@ struct InspectorView: View {
                 .pickerStyle(.segmented)
                 Toggle("Scale bar", isOn: $showScaleBar)
                     .help("Show a length reference in the viewport (exact at the structure's center depth)")
+                Picker("Pane 1 (main)", selection: $pane1View) {
+                    Text("Free").tag("free")
+                    ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
+                        Text($0.label).tag($0.rawValue)
+                    }
+                }
+                .onChange(of: pane1View) { value in
+                    if let preset = RenderCore.ViewPreset(rawValue: value) {
+                        model.applyViewPreset(preset)
+                    }
+                }
                 panePicker("Pane 2", $pane2View)
                 panePicker("Pane 3", $pane3View)
                 panePicker("Pane 4", $pane4View)

@@ -116,13 +116,21 @@ struct ContentView: View {
 
     /// CAD-style view snap (the AutoCAD-cube idea, menu form): Top/Front/… set
     /// the camera to a canonical angle; orbiting afterwards returns to free view.
+    @AppStorage("pane1View") private var pane1View = "free"
+
     private var viewMenu: some View {
         Menu {
             ForEach(RenderCore.ViewPreset.allCases, id: \.self) { preset in
-                Button(preset.label) { model.applyViewPreset(preset) }
+                Button(preset.label) {
+                    model.applyViewPreset(preset)
+                    pane1View = preset.rawValue
+                }
             }
             Divider()
-            Button("Reset Camera") { model.cameraResetToken += 1 }
+            Button("Reset Camera") {
+                model.cameraResetToken += 1
+                pane1View = "free"
+            }
         } label: {
             Label("View", systemImage: "cube")
         }
