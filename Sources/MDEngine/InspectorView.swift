@@ -418,7 +418,8 @@ private struct PaneGroup: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 110)
+            .fixedSize()
+            .frame(width: 110, alignment: .trailing)
             .onChange(of: preset) { value in
                 if isMain, let p = RenderCore.ViewPreset(rawValue: value) {
                     model.applyViewPreset(p)
