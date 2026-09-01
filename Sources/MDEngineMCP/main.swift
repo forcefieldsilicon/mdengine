@@ -49,7 +49,12 @@ func readText(path: String) throws -> String {
 }
 
 func parseFrames(path: String) throws -> [[Arv]] {
-    let frames = TrajectoryReader.parseFrames(try readText(path: path))
+    guard FileManager.default.fileExists(atPath: path) else { throw err("no such file: \(path)") }
+    let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+    guard (size ?? 0) < 2_000_000_000 else {
+        throw err("\(path) is \((size ?? 0) / 1_000_000) MB (limit 2 GB) — decimate first")
+    }
+    let frames = try TrajectoryReader.parseFrames(contentsOf: URL(fileURLWithPath: path))
     guard !frames.isEmpty else { throw err("no complete frames in \(path)") }
     return frames
 }

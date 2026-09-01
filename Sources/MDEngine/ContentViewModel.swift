@@ -88,6 +88,9 @@ final class ContentViewModel: ObservableObject {
 
     // MARK: - Video export
 
+    /// True while a file parse is in flight (drives the viewport spinner).
+    @Published var isLoading = false
+
     /// nil = idle; 0…1 while an export runs (drives the inspector progress bar).
     @Published var exportProgress: Double?
     private var exportCancelled = false
@@ -222,8 +225,7 @@ final class ContentViewModel: ObservableObject {
         watchedSize = size
         refreshInFlight = true
         parseQueue.async { [weak self] in
-            let text = try? String(contentsOf: url, encoding: .utf8)
-            let parsed = text.map(TrajectoryReader.parseFrames) ?? []
+            let parsed = (try? TrajectoryReader.parseFrames(contentsOf: url)) ?? []
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.refreshInFlight = false
@@ -264,12 +266,14 @@ final class ContentViewModel: ObservableObject {
             return
         }
         sourceName = "Loading \(url.lastPathComponent)…"
+        isLoading = true
         parseQueue.async { [weak self] in
-            let text = try? String(contentsOf: url, encoding: .utf8)
-            let parsed = text.map(TrajectoryReader.parseFrames) ?? []
+            let loaded = try? TrajectoryReader.parseFrames(contentsOf: url)
+            let parsed = loaded ?? []
             DispatchQueue.main.async {
                 guard let self else { return }
-                guard text != nil else {
+                self.isLoading = false
+                guard loaded != nil else {
                     self.sourceName = ""
                     Self.alert("Could not read \(url.lastPathComponent)",
                                info: "The file could not be opened as text.")
