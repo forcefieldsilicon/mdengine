@@ -12,13 +12,16 @@ public final class OffscreenRenderer {
         public var distance: Float
         public var pan: SIMD2<Float>
         public var orthographic: Bool
+        public var roll: Float
         public init(yaw: Float = 0, pitch: Float = 0, distance: Float = 2.8,
-                    pan: SIMD2<Float> = .zero, orthographic: Bool = false) {
+                    pan: SIMD2<Float> = .zero, orthographic: Bool = false,
+                    roll: Float = 0) {
             self.yaw = yaw
             self.pitch = pitch
             self.distance = distance
             self.pan = pan
             self.orthographic = orthographic
+            self.roll = roll
         }
     }
 
@@ -133,7 +136,8 @@ public final class OffscreenRenderer {
         let mvp = RenderCore.projection(orthographic: camera.orthographic,
                                         distance: camera.distance, aspect: aspect)
                 * RenderCore.viewMatrix(yaw: camera.yaw, pitch: camera.pitch,
-                                        distance: camera.distance, pan: camera.pan)
+                                        distance: camera.distance, pan: camera.pan,
+                                        roll: camera.roll)
         // Sprite sizes are in pixels: scale with output height so atoms keep
         // the same visual fraction at 1080p, 4K, or a small GIF.
         let resScale = Float(height) / RenderCore.referenceDrawableHeight

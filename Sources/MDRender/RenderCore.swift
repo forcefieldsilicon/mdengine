@@ -86,10 +86,22 @@ public enum RenderCore {
         return m
     }
 
-    /// View matrix for the shared orbit camera rig.
+    public static func rotationZ(_ angle: Float) -> simd_float4x4 {
+        let c = cos(angle), s = sin(angle)
+        return simd_float4x4(columns: (
+            SIMD4<Float>(c, s, 0, 0),
+            SIMD4<Float>(-s, c, 0, 0),
+            SIMD4<Float>(0, 0, 1, 0),
+            SIMD4<Float>(0, 0, 0, 1)
+        ))
+    }
+
+    /// View matrix for the shared orbit camera rig. `roll` exists for canonical
+    /// side views: a two-axis rig cannot show a z-up slab's Left face with z
+    /// staying up; presets set it, interactive orbiting leaves it alone.
     public static func viewMatrix(yaw: Float, pitch: Float, distance: Float,
-                                  pan: SIMD2<Float>) -> simd_float4x4 {
-        translation(pan.x, pan.y, -distance) * rotationX(pitch) * rotationY(yaw)
+                                  pan: SIMD2<Float>, roll: Float = 0) -> simd_float4x4 {
+        translation(pan.x, pan.y, -distance) * rotationZ(roll) * rotationX(pitch) * rotationY(yaw)
     }
 
     /// Projection for the shared camera. Orthographic frames the same height
@@ -109,17 +121,20 @@ public enum RenderCore {
         return candidates.min { abs($0 - t) < abs($1 - t) } ?? 10
     }
 
-    /// Canonical view presets for z-up MD data (slabs, deposition boxes),
-    /// expressed in the orbit rig's yaw/pitch. Side views (left/right) are not
-    /// expressible with z up in a two-axis rig, hence this set.
+    /// Canonical view presets for z-up MD data (slabs, deposition boxes).
+    /// Isometric looks from the (−x, +y, +z) corner (direction cosines
+    /// 135°/45°/−45° to the axes) — the app's home view. Left needs camera
+    /// roll to keep z up.
     public enum ViewPreset: String, CaseIterable {
-        case top, bottom, front, rear
-        public var yawPitch: (yaw: Float, pitch: Float) {
+        case isometric, top, bottom, front, rear, left
+        public var viewAngles: (yaw: Float, pitch: Float, roll: Float) {
             switch self {
-            case .top:    return (0, 0)
-            case .bottom: return (0, .pi)
-            case .front:  return (0, -.pi / 2)
-            case .rear:   return (.pi, .pi / 2)
+            case .isometric: return (.pi / 4, atan(1 / sqrt(2)), 0)
+            case .top:    return (0, 0, 0)
+            case .bottom: return (0, .pi, 0)
+            case .front:  return (0, -.pi / 2, 0)
+            case .rear:   return (.pi, .pi / 2, 0)
+            case .left:   return (.pi / 2, 0, .pi / 2)
             }
         }
         public var label: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }

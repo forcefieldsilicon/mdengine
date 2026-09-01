@@ -16,18 +16,21 @@ final class ViewportScale: ObservableObject {
     @Published var yaw: Float = 0
     @Published var pitch: Float = 0
     @Published var pan = SIMD2<Float>(0, 0)
+    @Published var roll: Float = 0
 
     func update(distance: Float, angstromsPerModelUnit: Float,
-                yaw: Float, pitch: Float, pan: SIMD2<Float>) {
+                yaw: Float, pitch: Float, pan: SIMD2<Float>, roll: Float) {
         guard distance != self.distance
                 || angstromsPerModelUnit != self.angstromsPerModelUnit
-                || yaw != self.yaw || pitch != self.pitch || pan != self.pan else { return }
+                || yaw != self.yaw || pitch != self.pitch || pan != self.pan
+                || roll != self.roll else { return }
         DispatchQueue.main.async {
             self.distance = distance
             self.angstromsPerModelUnit = angstromsPerModelUnit
             self.yaw = yaw
             self.pitch = pitch
             self.pan = pan
+            self.roll = roll
         }
     }
 }

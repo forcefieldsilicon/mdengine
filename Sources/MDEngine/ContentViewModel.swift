@@ -103,7 +103,8 @@ final class ContentViewModel: ObservableObject {
         let camera = OffscreenRenderer.Camera(
             yaw: vs.yaw, pitch: vs.pitch,
             distance: vs.distance > 0 ? vs.distance : 2.8, pan: vs.pan,
-            orthographic: d.bool(forKey: "orthographicProjection"))
+            orthographic: d.bool(forKey: "orthographicProjection"),
+            roll: vs.roll)
 
         var options = VideoExporter.Options(
             width: height * 16 / 9, height: height, fps: fps, stride: stride,

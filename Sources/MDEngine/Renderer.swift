@@ -23,8 +23,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var atomCount: Int = 0
 
     // Orbit camera around the (already centred/normalised) structure.
-    private var yaw: Float = 0
-    private var pitch: Float = 0
+    // Home view = isometric (the app default).
+    private var yaw: Float = RenderCore.ViewPreset.isometric.viewAngles.yaw
+    private var pitch: Float = RenderCore.ViewPreset.isometric.viewAngles.pitch
+    private var roll: Float = 0
     private var distance: Float = Renderer.homeDistance
     private var pan = SIMD2<Float>(0, 0)
     private static let homeDistance: Float = 2.8
@@ -148,20 +150,18 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func resetCamera() {
-        yaw = 0
-        pitch = 0
-        pan = SIMD2<Float>(0, 0)
+        setView(.isometric)
         distance = Renderer.homeDistance
-        publishViewportScale()
     }
 
     /// Snap to a canonical view (Top/Front/…): exact angles, pan cleared,
     /// zoom kept. Preset pitches may exceed the interactive orbit clamp —
     /// the next orbit drag re-clamps, which is the CAD-usual behavior.
     func setView(_ preset: RenderCore.ViewPreset) {
-        let v = preset.yawPitch
+        let v = preset.viewAngles
         yaw = v.yaw
         pitch = v.pitch
+        roll = v.roll
         pan = SIMD2<Float>(0, 0)
         publishViewportScale()
     }
@@ -174,7 +174,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard publishesViewportScale else { return }
         ViewportScale.shared.update(distance: distance,
                                     angstromsPerModelUnit: scale > 0 ? 1 / scale : 0,
-                                    yaw: yaw, pitch: pitch, pan: pan)
+                                    yaw: yaw, pitch: pitch, pan: pan, roll: roll)
     }
 
     /// Settings written by SettingsView via @AppStorage; defaults must match.
@@ -214,7 +214,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let projection = RenderCore.projection(orthographic: orthographic,
                                                distance: distance, aspect: aspect)
         let viewMatrix = RenderCore.viewMatrix(yaw: yaw, pitch: pitch,
-                                               distance: distance, pan: pan)
+                                               distance: distance, pan: pan, roll: roll)
         // Base size is divided by clip-space w in the shader, so atoms grow as
         // the camera closes in and nearer atoms render larger than far ones.
         // Orthographic w is 1, so pre-divide by distance to keep sizes matched.

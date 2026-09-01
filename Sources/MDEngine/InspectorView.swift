@@ -138,6 +138,12 @@ struct InspectorView: View {
 
             Section {
                 Button("Restore Defaults") {
+                    let d = UserDefaults.standard
+                    for i in 1...4 {
+                        d.set(i == 1, forKey: "pane\(i)Enabled")
+                        d.set(PaneGroup.defaultPreset(i), forKey: "pane\(i)Preset")
+                    }
+                    model.applyViewPreset(.isometric)
                     orthographic = false
                     atomPointSize = 14
                     orbitSensitivity = 8
@@ -288,10 +294,20 @@ private struct PaneGroup: View {
         self.model = model
         _expanded = AppStorage(wrappedValue: false, "pane\(index)Expanded")
         _enabled = AppStorage(wrappedValue: index == 1, "pane\(index)Enabled")
-        _preset = AppStorage(wrappedValue: index == 1 ? "free" : "top", "pane\(index)Preset")
+        _preset = AppStorage(wrappedValue: PaneGroup.defaultPreset(index), "pane\(index)Preset")
     }
 
     private var isMain: Bool { index == 1 }
+
+    /// Factory defaults: main = Isometric; panes 2/3/4 = Top/Left/Front.
+    static func defaultPreset(_ index: Int) -> String {
+        switch index {
+        case 1: return "isometric"
+        case 3: return "left"
+        case 4: return "front"
+        default: return "top"
+        }
+    }
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
