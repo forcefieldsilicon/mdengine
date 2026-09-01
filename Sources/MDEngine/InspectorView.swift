@@ -138,9 +138,10 @@ struct InspectorView: View {
 
             Section {
                 Button("Restore Defaults") {
+                    // Reset each pane's VIEW to factory (Isometric/Top/Left/
+                    // Front) but leave which panes are on/off alone.
                     let d = UserDefaults.standard
                     for i in 1...4 {
-                        d.set(i == 1, forKey: "pane\(i)Enabled")
                         d.set(PaneGroup.defaultPreset(i), forKey: "pane\(i)Preset")
                     }
                     model.applyViewPreset(.isometric)
