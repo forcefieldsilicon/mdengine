@@ -3,6 +3,7 @@ import LAMMPSCore
 
 struct ContentView: View {
     @ObservedObject var model: ContentViewModel
+    @AppStorage("showScaleBar") private var showScaleBar = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -11,6 +12,16 @@ struct ContentView: View {
                       generation: model.generation,
                       cameraResetToken: model.cameraResetToken)
                 .frame(minWidth: 600, minHeight: 600)
+                .overlay(alignment: .bottomLeading) {
+                    if showScaleBar && !model.atoms.isEmpty {
+                        GeometryReader { geo in
+                            ScaleBarView(viewportHeight: geo.size.height)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                       alignment: .bottomLeading)
+                                .padding(12)
+                        }
+                    }
+                }
 
             if model.frames.count > 1 {
                 HStack(alignment: .center, spacing: 14) {

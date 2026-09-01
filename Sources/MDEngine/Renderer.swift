@@ -103,6 +103,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         // under GPU memory; otherwise rebuild the buffer on each frame change.
         cacheBuffers = totalAtoms * MemoryLayout<GPUAtom>.stride < 512 << 20
         currentFrame = min(currentFrame, frames.count - 1)
+        publishViewportScale()
         showFrame(currentFrame)
     }
 
@@ -143,6 +144,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     func zoom(byFactor factor: Float) {
         let f = max(0.2, factor)
         distance = max(1.1, min(12, distance / f))
+        publishViewportScale()
     }
 
     /// Translate the view target; deltas are mouse-drag distances in points.
@@ -159,6 +161,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         pitch = 0
         pan = SIMD2<Float>(0, 0)
         distance = Renderer.homeDistance
+        publishViewportScale()
+    }
+
+    private func publishViewportScale() {
+        ViewportScale.shared.update(distance: distance,
+                                    angstromsPerModelUnit: scale > 0 ? 1 / scale : 0)
     }
 
     /// Settings written by SettingsView via @AppStorage; defaults must match.

@@ -217,6 +217,14 @@ let toolDefs: [[String: Any]] = [
      "inputSchema": ["type": "object",
                      "properties": ["path": ["type": "string", "description": "Path to the trajectory file"]],
                      "required": ["path"]]],
+    ["name": "z_profile",
+     "description": "Depth analysis of a deposition/oxidation trajectory: locates the substrate's top surface plane along z (mean z of the top 5% of substrate atoms), then reports probe-atom penetration depths below it, at-surface and in-flight counts, mean bound-probe charge (when the dump has q), and a z histogram relative to the surface. Defaults: substrate = most abundant element, probe = second.",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string", "description": "Path to the trajectory file"],
+                                    "frame": ["type": "string", "description": "'first', 'last' (default), or a 0-based index"],
+                                    "substrate": ["type": "string", "description": "Substrate element/type token (default: most abundant)"],
+                                    "probe": ["type": "string", "description": "Deposited-species element/type token (default: second most abundant)"]],
+                     "required": ["path"]]],
     ["name": "export_frame",
      "description": "Write one frame of a trajectory to a new plain-XYZ file.",
      "inputSchema": ["type": "object",
@@ -298,6 +306,52 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
         last frame elements: \(elements)
         bbox (Å): x \(span(xs)) | y \(span(ys)) | z \(span(zs))
         """ + fields + charges
+
+    case "z_profile":
+        guard let path = a["path"] as? String else { throw err("invalid arguments: path") }
+        let frames = try parseFrames(path: path)
+        let frame: [Arv]
+        var frameLabel = "last"
+        switch (a["frame"] as? String) ?? "last" {
+        case "last": frame = frames.last!
+        case "first": frame = frames.first!; frameLabel = "first"
+        case let s:
+            guard let i = Int(s), frames.indices.contains(i) else {
+                throw err("frame must be 'first', 'last', or 0…\(frames.count - 1)")
+            }
+            frame = frames[i]; frameLabel = "#\(i)"
+        }
+        let defaults = ZProfileAnalysis.defaultElements(for: frame)
+        guard let substrate = (a["substrate"] as? String) ?? defaults?.substrate,
+              let probe = (a["probe"] as? String) ?? defaults?.probe else {
+            throw err("frame has fewer than two elements; pass substrate and probe explicitly")
+        }
+        guard let zp = ZProfileAnalysis(frame: frame, substrate: substrate, probe: probe) else {
+            throw err("no atoms of substrate '\(substrate)' or probe '\(probe)' in the frame (or they are the same)")
+        }
+        var lines = [
+            "file: \(path)  frame: \(frameLabel) of \(frames.count)",
+            "substrate: \(substrate)  probe: \(probe)",
+            String(format: "surface plane z = %.2f Å (top-5%% mean; single highest substrate atom z = %.2f)",
+                   zp.surfaceZ, zp.substrateMaxZ),
+            "probe atoms — penetrated: \(zp.penetrations.count), at surface (<\(String(format: "%.1f", ZProfileAnalysis.surfaceBand)) Å above): \(zp.atSurfaceCount), above/in flight: \(zp.aboveCount)",
+        ]
+        if let mx = zp.maxPenetration, let mn = zp.minPenetration, let mean = zp.meanPenetration {
+            lines.append(String(format: "penetration (Å below plane): min %.2f  mean %.2f  max %.2f", mn, mean, mx))
+            lines.append("depths: " + zp.penetrations.map { String(format: "%.2f", $0) }.joined(separator: " "))
+        } else {
+            lines.append("penetration: none (no probe atoms below the surface plane)")
+        }
+        if let q = zp.boundProbeMeanCharge {
+            lines.append(String(format: "bound probe mean charge: %+.3f e", q))
+        }
+        lines.append("z histogram rel. surface (negative = penetrated):")
+        for bin in zp.histogram where bin.count > 0 {
+            lines.append(String(format: "  %+6.1f…%+6.1f Å  %4d  %@",
+                                bin.range.lowerBound, bin.range.upperBound, bin.count,
+                                String(repeating: "#", count: min(60, bin.count))))
+        }
+        return lines.joined(separator: "\n")
 
     case "export_frame":
         guard let path = a["path"] as? String, let out = a["out"] as? String else {
