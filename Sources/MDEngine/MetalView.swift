@@ -121,7 +121,13 @@ struct MetalView: NSViewRepresentable {
         context.coordinator.renderer?.showFrame(frameIndex)
         if context.coordinator.cameraResetToken != cameraResetToken {
             context.coordinator.cameraResetToken = cameraResetToken
+            // Reset zoom/pan for every pane, but a pane with an assigned view
+            // resets TO that view — not to the main pane's isometric home.
             context.coordinator.renderer?.resetCamera()
+            if let preset {
+                context.coordinator.renderer?.setView(preset)
+                context.coordinator.appliedPreset = preset
+            }
         }
         if context.coordinator.styleGeneration != styleGeneration {
             context.coordinator.styleGeneration = styleGeneration
