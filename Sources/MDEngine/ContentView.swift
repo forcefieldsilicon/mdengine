@@ -133,11 +133,13 @@ struct ContentView: View {
 
     private var viewMenu: some View {
         Menu {
-            ForEach(RenderCore.ViewPreset.allCases, id: \.self) { preset in
-                Button(preset.label) {
-                    model.applyViewPreset(preset)
-                    pane1Preset = preset.rawValue
-                }
+            Button("Isometric") { snap(.isometric) }
+            Menu("Planes") {
+                Button("Top") { snap(.top) }
+                Button("Bottom") { snap(.bottom) }
+                Button("Front") { snap(.front) }
+                Button("Rear") { snap(.rear) }
+                Button("Left") { snap(.left) }
             }
             Divider()
             Button("Reset Camera") {
@@ -152,7 +154,12 @@ struct ContentView: View {
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
         .foregroundColor(.white.opacity(0.9))
-        .help("Snap the camera to a canonical view (Top/Bottom/Front/Rear)")
+        .help("Snap the camera: Isometric, or a plane view (Top/Bottom/Front/Rear/Left)")
+    }
+
+    private func snap(_ preset: RenderCore.ViewPreset) {
+        model.applyViewPreset(preset)
+        pane1Preset = preset.rawValue
     }
 
     private var summaryBar: some View {
