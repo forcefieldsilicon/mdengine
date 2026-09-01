@@ -150,9 +150,9 @@ struct InspectorView: View {
                 } else {
                     HStack {
                         Text("Element").font(.caption).foregroundColor(.secondary)
-                        Spacer()
+                            .frame(width: 76, alignment: .leading)
                         Text("Size ×").font(.caption).foregroundColor(.secondary)
-                            .frame(width: 100)
+                            .frame(maxWidth: .infinity)
                         Text("Count").font(.caption).foregroundColor(.secondary)
                             .frame(width: 54, alignment: .trailing)
                     }
@@ -472,9 +472,9 @@ private struct ElementRow: View {
                 }
                 .help("Atom color for \(element)")
             Text(element)
-            Spacer()
+                .frame(minWidth: 40, alignment: .leading)
             Slider(value: $sizeFactor, in: 0.3...3)
-                .frame(width: 100)
+                .frame(minWidth: 100, maxWidth: .infinity)
                 .onChange(of: sizeFactor) { f in
                     ElementStyleStore.setSize(f, for: element)
                     model.styleGeneration += 1
