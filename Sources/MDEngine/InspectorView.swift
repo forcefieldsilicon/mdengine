@@ -50,6 +50,9 @@ struct InspectorView: View {
                     Spacer()
                     Text("View").font(.caption).foregroundColor(.secondary)
                         .frame(width: 110)
+                    Text("Bar").font(.caption).foregroundColor(.secondary)
+                        .frame(width: 30)
+                        .help("Scale bar in this pane")
                     Text("On").font(.caption).foregroundColor(.secondary)
                         .frame(width: 34)
                 }
@@ -331,37 +334,17 @@ private struct PaneGroup: View {
     var body: some View {
         // An OFF pane is a single plain row (name + switch) — its view picker
         // only appears once the pane is on, so the panel stays uncluttered.
-        Group {
-            if isMain || enabled {
-                DisclosureGroup(isExpanded: $expanded) {
-                    Toggle("Scale bar", isOn: $scaleBar)
-                        .toggleStyle(.checkbox)
-                        .disabled(!showScaleBar)
-                        .help(showScaleBar ? "Show the scale bar in this pane"
-                                           : "Turn on the master Scale bar checkbox above first")
-                } label: {
-                    headerRow(active: true)
-                }
-            } else {
-                headerRow(active: false)
-            }
-        }
+        headerRow
     }
 
-    /// One row per pane: name · view picker (when on) · on/off switch — the
-    /// "View" column titles sit above the rows. Expanding reveals per-pane
-    /// extras (scale bar).
-    private func headerRow(active: Bool) -> some View {
+    /// One flat row per pane: name · view picker · scale-bar checkbox · on/off
+    /// switch. Controls appear only while the pane is on, so off panes stay
+    /// minimal; the "Bar" checkbox obeys the master Scale bar checkbox above.
+    private var headerRow: some View {
         HStack {
-            HStack {
-                Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
-                Spacer()
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if active { withAnimation { expanded.toggle() } }
-            }
-            if active {
+            Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
+            Spacer()
+            if isMain || enabled {
                 Picker("", selection: $preset) {
                     Text("Free").tag("free")
                     ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
@@ -375,6 +358,13 @@ private struct PaneGroup: View {
                         model.applyViewPreset(p)
                     }
                 }
+                Toggle("", isOn: $scaleBar)
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .disabled(!showScaleBar)
+                    .frame(width: 30)
+                    .help(showScaleBar ? "Show the scale bar in this pane"
+                                       : "Turn on the master Scale bar checkbox above first")
             }
             Toggle("", isOn: $enabled)
                 .toggleStyle(.switch)

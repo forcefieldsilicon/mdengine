@@ -125,20 +125,6 @@ struct ContentView: View {
             .overlay(alignment: .topTrailing) {
                 if !model.atoms.isEmpty { viewMenu.padding(10) }
             }
-            .overlay {
-                if model.isLoading {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                            .controlSize(.large)
-                        Text(model.sourceName.isEmpty ? "Loading…" : model.sourceName)
-                            .font(.callout)
-                            .foregroundColor(.white.opacity(0.85))
-                    }
-                    .padding(24)
-                    .background(Color.black.opacity(0.45),
-                                in: RoundedRectangle(cornerRadius: 12))
-                }
-            }
     }
 
     /// CAD-style view snap (the AutoCAD-cube idea, menu form): Top/Front/… set
@@ -194,6 +180,9 @@ struct ContentView: View {
                 Label("live", systemImage: "dot.radiowaves.left.and.right")
                     .foregroundColor(.green)
                     .help("Following the file: frames a running simulation appends show up automatically")
+            }
+            if model.isLoading {
+                ProgressView().controlSize(.small)
             }
             Text(total == 0
                  ? "Loading trajectory…"
