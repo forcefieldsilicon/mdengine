@@ -72,6 +72,15 @@ final class ContentViewModel: ObservableObject {
 
     // MARK: - Playback
 
+    /// Frames per second while playing; the speed bar above the play button
+    /// drives this. Persisted, and applied live mid-playback.
+    @Published var playbackFPS: Double = max(1, min(60, UserDefaults.standard.object(forKey: "playbackFPS") as? Double ?? 10)) {
+        didSet {
+            UserDefaults.standard.set(playbackFPS, forKey: "playbackFPS")
+            if isPlaying { startPlayback() }
+        }
+    }
+
     func togglePlayback() {
         isPlaying ? stopPlayback() : startPlayback()
     }
@@ -80,7 +89,8 @@ final class ContentViewModel: ObservableObject {
         guard frames.count > 1 else { return }
         isPlaying = true
         playTimer?.invalidate()
-        playTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        playTimer = Timer.scheduledTimer(withTimeInterval: 1 / max(1, playbackFPS),
+                                         repeats: true) { [weak self] _ in
             self?.stepPlayback()
         }
     }

@@ -26,6 +26,13 @@ struct ContentView: View {
             if model.frames.count > 1 {
                 HStack(alignment: .center, spacing: 14) {
                     VStack(spacing: 3) {
+                        Slider(value: $model.playbackFPS, in: 1...60, step: 1)
+                            .controlSize(.mini)
+                            .frame(width: 72)
+                            .help("Playback speed: \(Int(model.playbackFPS)) frames/s")
+                        Text("\(Int(model.playbackFPS)) f/s")
+                            .font(.system(size: 9).monospacedDigit())
+                            .foregroundColor(.secondary)
                         Button {
                             model.togglePlayback()
                         } label: {
