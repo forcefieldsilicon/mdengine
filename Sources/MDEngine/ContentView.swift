@@ -174,7 +174,7 @@ struct ContentView: View {
             }
             Text(total == 0
                  ? "Loading trajectory…"
-                 : "\(model.sourceName) · Orbit: drag · Pan: double-click-drag · Zoom: scroll")
+                 : "\(model.sourceName) · Orbit: drag · Pan: double-click- or two-finger-drag · Zoom: scroll")
                 .foregroundColor(.secondary)
                 .lineLimit(1)
             Button {

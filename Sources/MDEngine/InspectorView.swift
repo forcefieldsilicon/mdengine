@@ -264,6 +264,9 @@ private struct CollapsibleSection<Content: View>: View {
                 content()
             } label: {
                 Text(title).font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { withAnimation { expanded.toggle() } }
             }
         }
     }
@@ -312,6 +315,8 @@ private struct PaneGroup: View {
                 Spacer()
                 Text(statusText).foregroundColor(.secondary)
             }
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation { expanded.toggle() } }
         }
     }
 

@@ -4,8 +4,8 @@ import LAMMPSCore
 import MDRender
 
 /// MTKView subclass that feeds mouse/trackpad input to the renderer:
-/// Orbit: drag. Pan: double-click-drag (hold after the second click; OVITO-style).
-/// Zoom: scroll or pinch. Reset: plain double-click.
+/// Orbit: drag. Pan: double-click-drag (OVITO-style) or two-finger drag
+/// (trackpad secondary-button drag). Zoom: scroll or pinch. Reset: double-click.
 final class InteractiveMTKView: MTKView {
     weak var renderer: Renderer?
 
@@ -58,6 +58,11 @@ final class InteractiveMTKView: MTKView {
             renderer?.resetCamera()
         }
         isPanning = false
+    }
+
+    // Two-finger click-drag (the trackpad's secondary button) pans.
+    override func rightMouseDragged(with event: NSEvent) {
+        renderer?.pan(dx: Float(event.deltaX), dy: Float(event.deltaY))
     }
 
     override func scrollWheel(with event: NSEvent) {
