@@ -218,7 +218,7 @@ struct InspectorView: View {
                 LabeledContent("Surface plane") { Text(String(format: "z = %.1f Å", zp.surfaceZ)).monospacedDigit() }
                 LabeledContent("Penetrated") { Text("\(zp.penetrations.count)").monospacedDigit() }
                 if let maxP = zp.maxPenetration, let minP = zp.minPenetration, let meanP = zp.meanPenetration {
-                    LabeledContent("Depth min · mean · max") {
+                    LabeledContent("Depth (Å)") {
                         Text(String(format: "%.2f · %.2f · %.2f Å", minP, meanP, maxP))
                             .monospacedDigit()
                     }
@@ -343,6 +343,8 @@ private struct PaneGroup: View {
     private var headerRow: some View {
         HStack {
             Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
+                .lineLimit(1)
+                .fixedSize()
             Spacer()
             if isMain || enabled {
                 Picker("", selection: $preset) {

@@ -53,7 +53,7 @@ struct ContentView: View {
         .navigationTitle(model.sourceName.isEmpty ? "MDEngine" : model.sourceName)
         .inspector(isPresented: $model.showInspector) {
             InspectorView(model: model)
-                .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
+                .inspectorColumnWidth(min: 320, ideal: 340, max: 460)
         }
         .onAppear {
             AppDelegate.openHandler = { [weak model] url in model?.load(url: url) }
