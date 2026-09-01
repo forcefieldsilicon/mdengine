@@ -43,6 +43,13 @@ enum ElementStyleStore {
         }
     }
 
+    /// Restore Defaults resets sizes but keeps the user's colors.
+    static func resetSizes(elements: [String]) {
+        for e in elements {
+            UserDefaults.standard.removeObject(forKey: "elemSize.\(e)")
+        }
+    }
+
     static func color(for element: String) -> SIMD3<Float> {
         currentStyle().color(for: element)
     }

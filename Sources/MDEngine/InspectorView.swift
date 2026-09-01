@@ -221,7 +221,7 @@ struct InspectorView: View {
                         d.set(PaneGroup.defaultPreset(i), forKey: "pane\(i)Preset")
                     }
                     model.cameraResetToken += 1   // isometric + home zoom + centered
-                    ElementStyleStore.reset(elements: elementNames)
+                    ElementStyleStore.resetSizes(elements: elementNames)   // views + sizes reset; colors kept
                     model.styleGeneration += 1
                     model.styleResetToken += 1
                     orthographic = false
