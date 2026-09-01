@@ -45,6 +45,14 @@ struct InspectorView: View {
                             UserDefaults.standard.set(true, forKey: "pane\(i)ScaleBar")
                         }
                     }
+                HStack {
+                    Text("Pane").font(.caption).foregroundColor(.secondary)
+                    Spacer()
+                    Text("View").font(.caption).foregroundColor(.secondary)
+                        .frame(width: 110)
+                    Text("On").font(.caption).foregroundColor(.secondary)
+                        .frame(width: 34)
+                }
                 PaneGroup(index: 1, model: model)
                 PaneGroup(index: 2, model: model)
                 PaneGroup(index: 3, model: model)
@@ -326,60 +334,57 @@ private struct PaneGroup: View {
         Group {
             if isMain || enabled {
                 DisclosureGroup(isExpanded: $expanded) {
-                    viewPicker
                     Toggle("Scale bar", isOn: $scaleBar)
                         .toggleStyle(.checkbox)
                         .disabled(!showScaleBar)
                         .help(showScaleBar ? "Show the scale bar in this pane"
                                            : "Turn on the master Scale bar checkbox above first")
                 } label: {
-                    headerRow(expandsOnTap: true)
+                    headerRow(active: true)
                 }
             } else {
-                headerRow(expandsOnTap: false)
-            }
-        }
-        .onChange(of: enabled) { on in
-            withAnimation { expanded = on }   // reveal the picker right away
-        }
-    }
-
-    private var viewPicker: some View {
-        Picker("View", selection: $preset) {
-            Text("Free").tag("free")
-            ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
-                Text($0.label).tag($0.rawValue)
-            }
-        }
-        .onChange(of: preset) { value in
-            if isMain, let p = RenderCore.ViewPreset(rawValue: value) {
-                model.applyViewPreset(p)
+                headerRow(active: false)
             }
         }
     }
 
-    private func headerRow(expandsOnTap: Bool) -> some View {
+    /// One row per pane: name · view picker (when on) · on/off switch — the
+    /// "View" column titles sit above the rows. Expanding reveals per-pane
+    /// extras (scale bar).
+    private func headerRow(active: Bool) -> some View {
         HStack {
             HStack {
                 Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
                 Spacer()
-                if expandsOnTap { Text(statusText).foregroundColor(.secondary) }
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                if expandsOnTap { withAnimation { expanded.toggle() } }
+                if active { withAnimation { expanded.toggle() } }
+            }
+            if active {
+                Picker("", selection: $preset) {
+                    Text("Free").tag("free")
+                    ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
+                        Text($0.label).tag($0.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 110)
+                .onChange(of: preset) { value in
+                    if isMain, let p = RenderCore.ViewPreset(rawValue: value) {
+                        model.applyViewPreset(p)
+                    }
+                }
             }
             Toggle("", isOn: $enabled)
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .labelsHidden()
                 .disabled(isMain)
+                .frame(width: 34)
                 .help(isMain ? "Pane 1 is the main viewport — always on"
                              : "Show this pane in the viewport grid")
         }
     }
 
-    private var statusText: String {
-        RenderCore.ViewPreset(rawValue: preset)?.label ?? "Free"
-    }
 }
