@@ -1,0 +1,17 @@
+# Generic bundled example: Lennard-Jones argon melt (no research content)
+units lj
+atom_style atomic
+lattice fcc 0.8442
+region box block 0 10 0 10 0 10
+create_box 1 box
+create_atoms 1 box
+mass 1 1.0
+velocity all create 3.0 87287
+pair_style lj/cut 2.5
+pair_coeff 1 1 1.0 1.0 2.5
+neighbor 0.3 bin
+fix 1 all nve
+thermo 500
+dump d all xyz 200 lj_melt.xyz
+dump_modify d element Ar
+run 2000

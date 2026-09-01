@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MDEngine User Manual</title>
+<style>
+  :root{
+    --ink:#1c1a18; --muted:#6b645f; --rule:#ddd6d0; --accent:#b23a2e;
+    --bg:#faf8f6; --code:#f0ebe7;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e8e3de; --muted:#9a918b; --rule:#3a3532; --accent:#f0705e;
+           --bg:#171514; --code:#242020; }
+  }
+  body{ margin:0; background:var(--bg); color:var(--ink);
+        font:16px/1.6 -apple-system, "Helvetica Neue", sans-serif; }
+  main{ max-width:44rem; margin:0 auto; padding:3rem 1.5rem 5rem; }
+  h1{ font-size:2rem; margin:.2rem 0 0; letter-spacing:-.02em; }
+  .sub{ color:var(--muted); margin:0 0 2.5rem; }
+  h2{ font-size:1.25rem; margin:2.4rem 0 .6rem; padding-top:1.2rem;
+      border-top:1px solid var(--rule); }
+  kbd, code{ background:var(--code); border:1px solid var(--rule); border-radius:4px;
+       padding:.08em .4em; font:0.85em ui-monospace, Menlo, monospace; }
+  table{ border-collapse:collapse; width:100%; margin:.8rem 0; }
+  th, td{ text-align:left; padding:.45rem .6rem; border-bottom:1px solid var(--rule);
+          vertical-align:top; }
+  th{ font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  .tag{ color:var(--accent); font-weight:600; }
+  pre{ background:var(--code); border:1px solid var(--rule); border-radius:6px;
+       padding:.9rem 1rem; overflow-x:auto; font-size:.85em; line-height:1.5; }
+  p.note{ color:var(--muted); font-size:.9em; }
+</style>
+</head>
+<body>
+<main>
+  <p class="tag">MDEngine · ForceField Silicon</p>
+  <h1>User Manual</h1>
+  <p class="sub">A native macOS viewer for molecular-dynamics trajectories.</p>
+
+  <h2>Overview</h2>
+  <p>MDEngine renders the final frame of a molecular-dynamics trajectory as a 3D
+  point-sphere cloud using Metal. It ships with two examples — a Lennard-Jones argon melt and a ReaxFF iron
+  oxidation run (bcc Fe slab meeting O₂ gas), each with the deck that
+  generated it — and opens any XYZ / extended-XYZ file from disk. Multi-frame trajectories open at their final
+  frame, with a timeline for scrubbing and playback. Loaded files are
+  <b>followed live</b>: when a running simulation appends frames to the file,
+  they appear on the timeline automatically (the summary bar shows a green
+  “live” badge) — no re-loading needed.</p>
+
+  <h2>Camera controls</h2>
+  <table>
+    <tr><th>Gesture</th><th>Action</th></tr>
+    <tr><td><b>Orbit</b> — click + drag</td><td>Rotate around the structure</td></tr>
+    <tr><td><b>Pan</b> — double-click-drag (hold after the second click)</td><td>Move the view position</td></tr>
+    <tr><td><b>Zoom</b> — scroll or trackpad pinch</td><td>Move closer / further</td></tr>
+    <tr><td><b>Reset</b> — double-click (release without dragging)</td><td>Return to the home view</td></tr>
+    <tr><td><b>Timeline</b> (bottom)</td><td>Drag to scrub through frames; frame numbers
+        under major marks (grid configurable in the inspector). The play button
+        steps through the trajectory at the speed set by the bar above it
+        (1–60 frames/s, applied live, persisted); check <b>Loop</b> to repeat
+        from the first frame at the end.</td></tr>
+  </table>
+
+  <h2>Menus</h2>
+  <table>
+    <tr><th>Menu item</th><th>Does</th></tr>
+    <tr><td>File ▸ Load File… <kbd>⌘O</kbd></td>
+        <td>Open an XYZ / extended-XYZ trajectory or dump file. Multi-frame
+            files show their last complete frame.</td></tr>
+    <tr><td>File ▸ Open Recent</td>
+        <td>The last ten trajectories, most recent first.</td></tr>
+    <tr><td>File ▸ Export File… <kbd>⌘E</kbd></td>
+        <td>Write the currently displayed frame back to disk as plain XYZ.</td></tr>
+    <tr><td>Edit ▸ Application Settings… <kbd>⌘,</kbd></td>
+        <td>Atom size, orbit speed, and background brightness. Changes apply
+            live and persist across launches.</td></tr>
+    <tr><td>View ▸ Show Inspector <kbd>⌥⌘I</kbd></td>
+        <td>Right-side panel: projection, scale bar, timeline grid, display, camera,
+            element legend, and the Z-profile analysis.</td></tr>
+    <tr><td>View ▸ Orthographic Projection <kbd>⌥⌘P</kbd></td>
+        <td>Switch between perspective and orthographic views (also in the
+            inspector's View section). Orthographic keeps distances undistorted —
+            useful for reading layer spacing.</td></tr>
+    <tr><td>Help ▸ MDEngine User Manual</td><td>Opens this page.</td></tr>
+  </table>
+
+  <h2>Inspector analysis</h2>
+  <p><b>Scale bar</b> (Inspector ▸ View): a length reference drawn in the viewport,
+  snapping to a round Ångström value as you zoom. It is exact at the structure's
+  centre depth; in perspective, nearer and farther atoms deviate slightly
+  (orthographic <kbd>⌥⌘P</kbd> is depth-true everywhere). Toggle it off in the
+  same place.</p>
+  <p><b>Z-profile</b> (Inspector ▸ Z-profile): depth analysis of the current frame
+  for deposition/oxidation trajectories. Pick the <em>substrate</em> element (the
+  slab; defaults to the most abundant) and the <em>probe</em> (the deposited
+  species). The surface plane is the mean z of the top 5% of substrate atoms —
+  robust against strays and roughness. The readout gives the plane's z, how many
+  probe atoms have penetrated below it (with min · mean · max depths), how many
+  sit chemisorbed within 2.5&nbsp;Å above it, how many are still in flight, the
+  mean charge of bound probes (when the file carries charges), and a histogram
+  of probe height relative to the surface (orange bars = penetrated). It updates
+  live while scrubbing, during playback, and as a followed file grows. The same
+  analysis is available to agents as the MCP <code>z_profile</code> tool.</p>
+
+  <h2>File format</h2>
+  <p>MDEngine reads (multi-frame) XYZ and extended-XYZ:</p>
+<pre>4000
+Atoms. Timestep: 2000 (comment line — ignored)
+Ar   12.194  3.031  8.207
+Ar   11.402  4.114  9.882
+...</pre>
+  <p>One frame = a line with the atom count, a comment line, then one
+  <code>element&nbsp;x&nbsp;y&nbsp;z</code> row per atom; extra columns are ignored.
+  Elements render in CPK-style colours (Al silver, O red, Ar cyan; off-white otherwise).</p>
+
+  <h2>Simulation engine</h2>
+  <p>The rendering pipeline is live today. Simulations run through the <code>mdengine</code> CLI or the MCP server's
+  detached job runner (<code>submit_lammps</code> keeps the machine awake and
+  records results unattended). A <em>Run</em> menu in the app is the planned
+  next step; the bundled <code>lj_melt.in</code> deck is a ready test input.</p>
+
+  <h2>Command line</h2>
+  <p>The same engine ships as a terminal tool, <code>mdengine</code>:</p>
+  <table>
+    <tr><th>Command</th><th>Does</th></tr>
+    <tr><td><code>mdengine info file.xyz</code></td><td>Frames, atom counts, elements, bounding box</td></tr>
+    <tr><td><code>mdengine export file.xyz -o out.xyz --frame last</code></td><td>Write one frame as plain XYZ</td></tr>
+    <tr><td><code>mdengine decimate big.xyz --every 10</code></td><td>Keep every 10th frame (final frame always kept) — shrinks huge trajectories for viewing</td></tr>
+    <tr><td><code>mdengine run input.in --threads 6</code></td><td>Run LAMMPS with <code>-sf omp -pk omp N</code> so the OPENMP package is actually engaged</td></tr>
+    <tr><td><code>mdengine gui</code></td><td>Open MDEngine.app</td></tr>
+  </table>
+
+  <p class="note">MDEngine · ForceField Silicon (Gitinama Inc.) · this manual lives at
+  <code>/Applications/MDEngine/Contents/Resources/doc/manual/html/index.html</code></p>
+</main>
+</body>
+</html>
