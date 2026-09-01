@@ -6,12 +6,10 @@ struct ContentView: View {
     @ObservedObject var model: ContentViewModel
     @AppStorage("showScaleBar") private var showScaleBar = true
     @AppStorage("pane1ScaleBar") private var pane1ScaleBar = true
-    @AppStorage("pane2Enabled") private var pane2Enabled = false
-    @AppStorage("pane3Enabled") private var pane3Enabled = false
-    @AppStorage("pane4Enabled") private var pane4Enabled = false
+    @AppStorage("paneCount") private var paneCount = 1
     @AppStorage("pane2Preset") private var pane2Preset = "top"
-    @AppStorage("pane3Preset") private var pane3Preset = "top"
-    @AppStorage("pane4Preset") private var pane4Preset = "top"
+    @AppStorage("pane3Preset") private var pane3Preset = "left"
+    @AppStorage("pane4Preset") private var pane4Preset = "front"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,10 +66,10 @@ struct ContentView: View {
     }
 
     private var extraPanes: [ExtraPane] {
-        zip([2, 3, 4], zip([pane2Enabled, pane3Enabled, pane4Enabled],
-                           [pane2Preset, pane3Preset, pane4Preset]))
-            .filter { $0.1.0 }
-            .map { ExtraPane(id: $0.0, preset: RenderCore.ViewPreset(rawValue: $0.1.1)) }
+        let presets = [pane2Preset, pane3Preset, pane4Preset]
+        return (2...max(2, min(4, paneCount)))
+            .compactMap { paneCount >= $0 ? $0 : nil }
+            .map { ExtraPane(id: $0, preset: RenderCore.ViewPreset(rawValue: presets[$0 - 2])) }
     }
 
     @ViewBuilder private var viewportArea: some View {

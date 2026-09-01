@@ -17,6 +17,7 @@ struct InspectorView: View {
     @AppStorage("timelineShowNumbers") private var timelineShowNumbers = true
     @AppStorage("orthographicProjection") private var orthographic = false
     @AppStorage("showScaleBar") private var showScaleBar = true
+    @AppStorage("paneCount") private var paneCount = 1
     @AppStorage("videoHeight") private var videoHeight = 1080
     @AppStorage("videoFPS") private var videoFPS = 30
     @AppStorage("videoStride") private var videoStride = 0
@@ -45,6 +46,11 @@ struct InspectorView: View {
                             UserDefaults.standard.set(true, forKey: "pane\(i)ScaleBar")
                         }
                     }
+                Picker("Panes", selection: $paneCount) {
+                    ForEach(1...4, id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .help("Viewport layout: 1 = main pane only, up to a 2×2 grid. Hidden panes remember their views.")
                 HStack {
                     Text("Pane").font(.caption).foregroundColor(.secondary)
                     Spacer()
@@ -53,13 +59,10 @@ struct InspectorView: View {
                     Text("Bar").font(.caption).foregroundColor(.secondary)
                         .frame(width: 30)
                         .help("Scale bar in this pane")
-                    Text("On").font(.caption).foregroundColor(.secondary)
-                        .frame(width: 34)
                 }
-                PaneGroup(index: 1, model: model)
-                PaneGroup(index: 2, model: model)
-                PaneGroup(index: 3, model: model)
-                PaneGroup(index: 4, model: model)
+                ForEach(1...max(1, min(4, paneCount)), id: \.self) { i in
+                    PaneGroup(index: i, model: model)
+                }
             }
 
             CollapsibleSection("Camera", key: "inspExpCamera", initiallyExpanded: false) {
@@ -311,8 +314,6 @@ private struct CollapsibleSection<Content: View>: View {
 private struct PaneGroup: View {
     let index: Int
     @ObservedObject var model: ContentViewModel
-    @AppStorage private var expanded: Bool
-    @AppStorage private var enabled: Bool
     @AppStorage private var preset: String
     @AppStorage private var scaleBar: Bool
     @AppStorage("showScaleBar") private var showScaleBar = true
@@ -320,8 +321,6 @@ private struct PaneGroup: View {
     init(index: Int, model: ContentViewModel) {
         self.index = index
         self.model = model
-        _expanded = AppStorage(wrappedValue: false, "pane\(index)Expanded")
-        _enabled = AppStorage(wrappedValue: index == 1, "pane\(index)Enabled")
         _preset = AppStorage(wrappedValue: PaneGroup.defaultPreset(index), "pane\(index)Preset")
         _scaleBar = AppStorage(wrappedValue: true, "pane\(index)ScaleBar")
     }
@@ -344,45 +343,34 @@ private struct PaneGroup: View {
         headerRow
     }
 
-    /// One flat row per pane: name · view picker · scale-bar checkbox · on/off
-    /// switch. Controls appear only while the pane is on, so off panes stay
-    /// minimal; the "Bar" checkbox obeys the master Scale bar checkbox above.
+    /// One flat row per VISIBLE pane (the Panes segments decide how many):
+    /// name · view picker · scale-bar checkbox.
     private var headerRow: some View {
         HStack {
             Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
                 .lineLimit(1)
                 .fixedSize()
             Spacer()
-            if isMain || enabled {
-                Picker("", selection: $preset) {
-                    Text("Free").tag("free")
-                    ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
-                        Text($0.label).tag($0.rawValue)
-                    }
+            Picker("", selection: $preset) {
+                Text("Free").tag("free")
+                ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
+                    Text($0.label).tag($0.rawValue)
                 }
-                .labelsHidden()
-                .frame(width: 110)
-                .onChange(of: preset) { value in
-                    if isMain, let p = RenderCore.ViewPreset(rawValue: value) {
-                        model.applyViewPreset(p)
-                    }
-                }
-                Toggle("", isOn: $scaleBar)
-                    .toggleStyle(.checkbox)
-                    .labelsHidden()
-                    .disabled(!showScaleBar)
-                    .frame(width: 30)
-                    .help(showScaleBar ? "Show the scale bar in this pane"
-                                       : "Turn on the master Scale bar checkbox above first")
             }
-            Toggle("", isOn: $enabled)
-                .toggleStyle(.switch)
-                .controlSize(.mini)
+            .labelsHidden()
+            .frame(width: 110)
+            .onChange(of: preset) { value in
+                if isMain, let p = RenderCore.ViewPreset(rawValue: value) {
+                    model.applyViewPreset(p)
+                }
+            }
+            Toggle("", isOn: $scaleBar)
+                .toggleStyle(.checkbox)
                 .labelsHidden()
-                .disabled(isMain)
-                .frame(width: 34)
-                .help(isMain ? "Pane 1 is the main viewport — always on"
-                             : "Show this pane in the viewport grid")
+                .disabled(!showScaleBar)
+                .frame(width: 30)
+                .help(showScaleBar ? "Show the scale bar in this pane"
+                                   : "Turn on the master Scale bar checkbox above first")
         }
     }
 
