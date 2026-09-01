@@ -1,27 +1,18 @@
 import SwiftUI
 import LAMMPSCore
+import MDRender
 
 struct ContentView: View {
     @ObservedObject var model: ContentViewModel
     @AppStorage("showScaleBar") private var showScaleBar = true
+    @AppStorage("pane2View") private var pane2View = "off"
+    @AppStorage("pane3View") private var pane3View = "off"
+    @AppStorage("pane4View") private var pane4View = "off"
 
     var body: some View {
         VStack(spacing: 0) {
-            MetalView(frames: model.frames,
-                      frameIndex: model.frameIndex,
-                      generation: model.generation,
-                      cameraResetToken: model.cameraResetToken)
+            viewportArea
                 .frame(minWidth: 600, minHeight: 600)
-                .overlay(alignment: .bottomLeading) {
-                    if showScaleBar && !model.atoms.isEmpty {
-                        GeometryReader { geo in
-                            ScaleBarView(viewportHeight: geo.size.height)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity,
-                                       alignment: .bottomLeading)
-                                .padding(12)
-                        }
-                    }
-                }
 
             if model.frames.count > 1 {
                 HStack(alignment: .center, spacing: 14) {
@@ -64,6 +55,83 @@ struct ContentView: View {
             AppDelegate.openHandler = { [weak model] url in model?.load(url: url) }
             model.runSimulationAndDisplayResults()
         }
+    }
+
+    /// Extra panes chosen in Inspector ▸ View (CAD-style Top/Front/Rear/Bottom).
+    private var extraPanes: [RenderCore.ViewPreset] {
+        [pane2View, pane3View, pane4View].compactMap { RenderCore.ViewPreset(rawValue: $0) }
+    }
+
+    @ViewBuilder private var viewportArea: some View {
+        let extras = extraPanes
+        if extras.isEmpty {
+            mainPane
+        } else {
+            // 2-up: side by side; 3–4 views: 2×2 grid, main pane top-left.
+            let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
+            LazyVGrid(columns: columns, spacing: 2) {
+                mainPane.aspectRatio(nil, contentMode: .fill)
+                ForEach(extras, id: \.self) { preset in
+                    MetalView(frames: model.frames,
+                              frameIndex: model.frameIndex,
+                              generation: model.generation,
+                              cameraResetToken: model.cameraResetToken,
+                              preset: preset,
+                              publishesScale: false)
+                        .overlay(alignment: .topLeading) {
+                            Text(preset.label)
+                                .font(.caption.bold())
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.black.opacity(0.35),
+                                            in: RoundedRectangle(cornerRadius: 4))
+                                .foregroundColor(.white.opacity(0.9))
+                                .padding(6)
+                        }
+                }
+            }
+        }
+    }
+
+    private var mainPane: some View {
+        MetalView(frames: model.frames,
+                  frameIndex: model.frameIndex,
+                  generation: model.generation,
+                  cameraResetToken: model.cameraResetToken,
+                  preset: model.pendingViewPreset,
+                  presetToken: model.viewPresetToken)
+            .overlay(alignment: .bottomLeading) {
+                if showScaleBar && !model.atoms.isEmpty {
+                    GeometryReader { geo in
+                        ScaleBarView(viewportHeight: geo.size.height)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: .bottomLeading)
+                            .padding(12)
+                    }
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if !model.atoms.isEmpty { viewMenu.padding(10) }
+            }
+    }
+
+    /// CAD-style view snap (the AutoCAD-cube idea, menu form): Top/Front/… set
+    /// the camera to a canonical angle; orbiting afterwards returns to free view.
+    private var viewMenu: some View {
+        Menu {
+            ForEach(RenderCore.ViewPreset.allCases, id: \.self) { preset in
+                Button(preset.label) { model.applyViewPreset(preset) }
+            }
+            Divider()
+            Button("Reset Camera") { model.cameraResetToken += 1 }
+        } label: {
+            Label("View", systemImage: "cube")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+        .foregroundColor(.white.opacity(0.9))
+        .help("Snap the camera to a canonical view (Top/Bottom/Front/Rear)")
     }
 
     private var summaryBar: some View {

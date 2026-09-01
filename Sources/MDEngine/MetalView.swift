@@ -1,6 +1,7 @@
 import SwiftUI
 import MetalKit
 import LAMMPSCore
+import MDRender
 
 /// MTKView subclass that feeds mouse/trackpad input to the renderer:
 /// Orbit: drag. Pan: double-click-drag (hold after the second click; OVITO-style).
@@ -75,6 +76,12 @@ struct MetalView: NSViewRepresentable {
     let frameIndex: Int
     let generation: Int   // bumped by the model on every file load
     let cameraResetToken: Int
+    /// Canonical view to snap to; applied when `presetToken` changes, or when
+    /// the preset value itself changes (extra panes switching Top → Front).
+    var preset: RenderCore.ViewPreset? = nil
+    var presetToken: Int = 0
+    /// Only the primary view publishes camera state (scale bar, video export).
+    var publishesScale: Bool = true
 
     func makeNSView(context: Context) -> MTKView {
         let device = MTLCreateSystemDefaultDevice()!
@@ -84,6 +91,7 @@ struct MetalView: NSViewRepresentable {
         view.delegate = renderer
         view.renderer = renderer
 
+        renderer.publishesViewportScale = publishesScale
         context.coordinator.renderer = renderer
         // AppKit can destroy and recreate this NSView (window restoration,
         // re-hosting) while the SAME coordinator survives. A fresh renderer
@@ -91,6 +99,7 @@ struct MetalView: NSViewRepresentable {
         // and render blank forever - reset so the next update re-uploads.
         context.coordinator.generation = -1
         context.coordinator.cameraResetToken = cameraResetToken
+        context.coordinator.presetToken = -1   // apply any preset on first update
         return view
     }
 
@@ -106,6 +115,13 @@ struct MetalView: NSViewRepresentable {
             context.coordinator.cameraResetToken = cameraResetToken
             context.coordinator.renderer?.resetCamera()
         }
+        if let preset,
+           context.coordinator.presetToken != presetToken
+            || context.coordinator.appliedPreset != preset {
+            context.coordinator.presetToken = presetToken
+            context.coordinator.appliedPreset = preset
+            context.coordinator.renderer?.setView(preset)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -116,5 +132,7 @@ struct MetalView: NSViewRepresentable {
         var renderer: Renderer?
         var generation = -1
         var cameraResetToken = 0
+        var presetToken = -1
+        var appliedPreset: RenderCore.ViewPreset?
     }
 }

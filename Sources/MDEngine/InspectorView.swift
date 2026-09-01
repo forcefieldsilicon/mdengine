@@ -1,5 +1,6 @@
 import SwiftUI
 import LAMMPSCore
+import MDRender
 
 /// Right-side inspector (⌥⌘I or the sidebar button): display, camera, and
 /// timeline-grid customization, plus a legend of the loaded elements.
@@ -16,6 +17,15 @@ struct InspectorView: View {
     @AppStorage("timelineShowNumbers") private var timelineShowNumbers = true
     @AppStorage("orthographicProjection") private var orthographic = false
     @AppStorage("showScaleBar") private var showScaleBar = true
+    @AppStorage("pane2View") private var pane2View = "off"
+    @AppStorage("pane3View") private var pane3View = "off"
+    @AppStorage("pane4View") private var pane4View = "off"
+    @AppStorage("videoHeight") private var videoHeight = 1080
+    @AppStorage("videoFPS") private var videoFPS = 30
+    @AppStorage("videoStride") private var videoStride = 0
+    @AppStorage("videoAnnotations") private var videoAnnotations = true
+    @AppStorage("videoOrbit") private var videoOrbit = false
+    @AppStorage("videoOrbitSpeed") private var videoOrbitSpeed = 6.0
 
     // Z-profile element roles; re-defaulted whenever the loaded element set changes.
     @State private var zSubstrate = ""
@@ -31,6 +41,53 @@ struct InspectorView: View {
                 .pickerStyle(.segmented)
                 Toggle("Scale bar", isOn: $showScaleBar)
                     .help("Show a length reference in the viewport (exact at the structure's center depth)")
+                panePicker("Pane 2", $pane2View)
+                panePicker("Pane 3", $pane3View)
+                panePicker("Pane 4", $pane4View)
+            }
+
+            Section("Video export") {
+                Picker("Resolution", selection: $videoHeight) {
+                    Text("1080p").tag(1080)
+                    Text("1440p").tag(1440)
+                    Text("4K").tag(2160)
+                }
+                Picker("Frame rate", selection: $videoFPS) {
+                    ForEach([24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
+                }
+                Picker("Stride", selection: $videoStride) {
+                    Text("auto (≈15 s)").tag(0)
+                    ForEach([1, 2, 5, 10, 20], id: \.self) { Text("every \($0)").tag($0) }
+                }
+                if model.frames.count > 1 {
+                    LabeledContent("Video length") {
+                        Text(videoDurationText).monospacedDigit()
+                    }
+                }
+                Toggle("Annotations", isOn: $videoAnnotations)
+                    .help("Bake the scale bar and frame counter into the video")
+                Toggle("Cinematic orbit", isOn: $videoOrbit)
+                    .help("Slowly rotate the camera while the trajectory plays")
+                if videoOrbit {
+                    LabeledContent("Orbit speed") {
+                        Slider(value: $videoOrbitSpeed, in: 1...30)
+                            .help("\(Int(videoOrbitSpeed))°/s")
+                    }
+                }
+                if let progress = model.exportProgress {
+                    HStack {
+                        ProgressView(value: progress)
+                        Button("Cancel") { model.cancelVideoExport() }
+                            .controlSize(.small)
+                    }
+                } else {
+                    HStack {
+                        Button("Export MP4…") { model.exportVideo(format: .mp4) }
+                        Button("Export GIF…") { model.exportVideo(format: .gif) }
+                            .help("Web-sized: 640×360, ≤15 fps — right for a README")
+                    }
+                    .disabled(model.frames.count < 2)
+                }
             }
 
             Section("Timeline grid") {
@@ -95,6 +152,24 @@ struct InspectorView: View {
         .formStyle(.grouped)
         .onAppear { defaultZElements() }
         .onChange(of: elementNames) { _ in defaultZElements() }
+    }
+
+    private func panePicker(_ label: String, _ selection: Binding<String>) -> some View {
+        Picker(label, selection: selection) {
+            Text("Off").tag("off")
+            ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
+                Text($0.label).tag($0.rawValue)
+            }
+        }
+    }
+
+    private var videoDurationText: String {
+        let fps = max(1, videoFPS)
+        let stride = videoStride > 0 ? videoStride
+            : VideoExporter.autoStride(frameCount: model.frames.count, fps: fps)
+        let outFrames = (model.frames.count + stride - 1) / stride
+        let seconds = Double(outFrames) / Double(fps)
+        return String(format: "%d frames · %.1f s", outFrames, seconds)
     }
 
     // MARK: - Z-profile (surface plane + penetration depths along z)

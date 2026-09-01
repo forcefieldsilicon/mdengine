@@ -103,6 +103,27 @@
   live while scrubbing, during playback, and as a followed file grows. The same
   analysis is available to agents as the MCP <code>z_profile</code> tool.</p>
 
+  <h2>Views</h2>
+  <p>The <b>View</b> button (top-right of the viewport) snaps the camera to a
+  canonical angle — Top, Bottom, Front, Rear (for z-up MD data) — or resets it;
+  orbiting afterwards returns to a free view. In Inspector ▸ View, <b>Pane
+  2/3/4</b> add up to three extra viewports in a CAD-style grid, each fixed to a
+  canonical view and following the same timeline; each pane can also be orbited
+  independently.</p>
+
+  <h2>Video export</h2>
+  <p><b>File ▸ Export Video…</b> <kbd>⇧⌘E</kbd> (or the buttons in Inspector ▸
+  Video export) renders the trajectory offscreen — through the same Metal
+  renderer, with your current camera — into an <b>MP4</b> (H.264; 1080p/1440p/4K,
+  24–60 fps) or a web-sized <b>GIF</b> (640×360, ≤15 fps — right for a README).
+  <b>Stride</b> renders every Nth frame; auto targets a ~15-second video.
+  <b>Annotations</b> (scale bar + frame counter) are baked in by default and can
+  be toggled off. <b>Cinematic orbit</b> rotates the camera slowly during
+  playback. Sprite sizes scale with output resolution, so 4K exports match what
+  the window shows. Agents can do the same headlessly through the MCP
+  <code>render_video</code> tool (camera angles, stride, annotations, and a
+  type→element mapping, e.g. <code>elements: "O,Al"</code>, as arguments).</p>
+
   <h2>File format</h2>
   <p>MDEngine reads (multi-frame) XYZ and extended-XYZ:</p>
 <pre>4000

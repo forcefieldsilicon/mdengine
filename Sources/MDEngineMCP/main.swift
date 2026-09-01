@@ -7,6 +7,7 @@
 
 import Foundation
 import LAMMPSCore
+import MDRender
 
 // MARK: - JSON-RPC plumbing
 
@@ -225,6 +226,23 @@ let toolDefs: [[String: Any]] = [
                                     "substrate": ["type": "string", "description": "Substrate element/type token (default: most abundant)"],
                                     "probe": ["type": "string", "description": "Deposited-species element/type token (default: second most abundant)"]],
                      "required": ["path"]]],
+    ["name": "render_video",
+     "description": "Render a trajectory into an MP4 (H.264) or animated GIF via the same Metal renderer the app uses. Annotations (scale bar + frame counter) baked by default. Camera defaults to the home view; pass yaw/pitch degrees to frame the shot (front view of a z-up slab: pitch -90). Stride defaults to ~15 s of video. Synchronous — a long trajectory at 4K can take minutes.",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string", "description": "Trajectory file"],
+                                    "out": ["type": "string", "description": "Output .mp4 or .gif path (format follows the extension)"],
+                                    "width": ["type": "integer", "description": "Pixels (default 1920; GIF default 640)"],
+                                    "height": ["type": "integer", "description": "Pixels (default 1080; GIF default 360)"],
+                                    "fps": ["type": "integer", "description": "Video frame rate (default 30; GIF capped 15)"],
+                                    "stride": ["type": "integer", "description": "Render every Nth trajectory frame (default: auto for ~15 s)"],
+                                    "yaw_deg": ["type": "number", "description": "Camera yaw in degrees (default 0)"],
+                                    "pitch_deg": ["type": "number", "description": "Camera pitch in degrees (default 0 = top view for z-up data; -90 = front)"],
+                                    "distance": ["type": "number", "description": "Camera distance in model units (default 2.8; smaller = closer)"],
+                                    "orthographic": ["type": "boolean", "description": "Orthographic projection (default false)"],
+                                    "orbit_dps": ["type": "number", "description": "Cinematic yaw rotation, degrees per second of video (default 0)"],
+                                    "annotations": ["type": "boolean", "description": "Bake scale bar + frame counter (default true)"],
+                                    "elements": ["type": "string", "description": "Map numeric type tokens to elements by position, e.g. 'O,Al' (type 1→O red, 2→Al silver) — colors follow the element"]],
+                     "required": ["path", "out"]]],
     ["name": "export_frame",
      "description": "Write one frame of a trajectory to a new plain-XYZ file.",
      "inputSchema": ["type": "object",
@@ -352,6 +370,42 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
                                 String(repeating: "#", count: min(60, bin.count))))
         }
         return lines.joined(separator: "\n")
+
+    case "render_video":
+        guard let path = a["path"] as? String, let out = a["out"] as? String else {
+            throw err("invalid arguments: path, out")
+        }
+        var vframes = try parseFrames(path: path)
+        guard vframes.count > 1 else { throw err("trajectory has fewer than 2 frames") }
+        if let spec = a["elements"] as? String {
+            vframes = vframes.mappingElements(
+                spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        }
+        let isGIF = out.lowercased().hasSuffix(".gif")
+        guard isGIF || out.lowercased().hasSuffix(".mp4") else {
+            throw err("out must end in .mp4 or .gif")
+        }
+        let camera = OffscreenRenderer.Camera(
+            yaw: Float((a["yaw_deg"] as? Double ?? 0) * .pi / 180),
+            pitch: Float((a["pitch_deg"] as? Double ?? 0) * .pi / 180),
+            distance: Float(a["distance"] as? Double ?? 2.8),
+            orthographic: a["orthographic"] as? Bool ?? false)
+        let options = VideoExporter.Options(
+            width: a["width"] as? Int ?? (isGIF ? 640 : 1920),
+            height: a["height"] as? Int ?? (isGIF ? 360 : 1080),
+            fps: min(a["fps"] as? Int ?? 30, isGIF ? 15 : 60),
+            stride: a["stride"] as? Int ?? 0,
+            format: isGIF ? .gif : .mp4,
+            annotations: a["annotations"] as? Bool ?? true,
+            orbitDegreesPerSecond: a["orbit_dps"] as? Double ?? 0,
+            camera: camera)
+        let start = Date()
+        let written = try VideoExporter.export(frames: vframes, to: URL(fileURLWithPath: out),
+                                               options: options)
+        let size = (try? FileManager.default.attributesOfItem(atPath: out)[.size] as? Int) ?? 0
+        return String(format: "wrote %@: %d video frames (%.1f s at %d fps) from %d trajectory frames, %.1f MB, rendered in %.0f s",
+                      out, written, Double(written) / Double(options.fps), options.fps,
+                      vframes.count, Double(size ?? 0) / 1_000_000, -start.timeIntervalSinceNow)
 
     case "export_frame":
         guard let path = a["path"] as? String, let out = a["out"] as? String else {

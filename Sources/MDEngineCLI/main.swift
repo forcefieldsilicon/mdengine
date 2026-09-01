@@ -62,12 +62,7 @@ func takeFlag(_ flag: String, _ args: inout [String]) -> Bool {
 func applyElementMap(_ frames: [[Arv]], _ args: inout [String]) -> [[Arv]] {
     guard let spec = takeOption("--elements", &args) else { return frames }
     let symbols = spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-    return frames.map { frame in
-        frame.map { a in
-            guard let t = Int(a.element), t >= 1, t <= symbols.count else { return a }
-            return Arv(element: symbols[t - 1], x: a.x, y: a.y, z: a.z, charge: a.charge)
-        }
-    }
+    return frames.mappingElements(symbols)
 }
 
 /// Value of `--flag v` in args, removing both tokens.

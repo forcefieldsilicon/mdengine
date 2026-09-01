@@ -1,4 +1,5 @@
 import Foundation
+import MDRender
 import AppKit
 import LAMMPSCore
 
@@ -68,6 +69,83 @@ final class ContentViewModel: ObservableObject {
         frameIndex = max(0, parsed.count - 1)   // open at the final state
         generation += 1
         sourceName = name
+    }
+
+    // MARK: - View presets (Top/Front/… snap, from the viewport menu)
+
+    @Published var viewPresetToken = 0
+    var pendingViewPreset: RenderCore.ViewPreset?
+
+    func applyViewPreset(_ preset: RenderCore.ViewPreset) {
+        pendingViewPreset = preset
+        viewPresetToken += 1
+    }
+
+    // MARK: - Video export
+
+    /// nil = idle; 0…1 while an export runs (drives the inspector progress bar).
+    @Published var exportProgress: Double?
+    private var exportCancelled = false
+
+    func cancelVideoExport() { exportCancelled = true }
+
+    func exportVideo(format: VideoExporter.Format) {
+        guard frames.count > 1, exportProgress == nil else { return }
+        let d = UserDefaults.standard
+        let height = d.object(forKey: "videoHeight") as? Int ?? 1080
+        let fps = d.object(forKey: "videoFPS") as? Int ?? 30
+        let stride = d.object(forKey: "videoStride") as? Int ?? 0
+        let annotations = d.object(forKey: "videoAnnotations") as? Bool ?? true
+        let orbit = d.object(forKey: "videoOrbit") as? Bool ?? false
+        let orbitSpeed = d.object(forKey: "videoOrbitSpeed") as? Double ?? 6
+
+        let vs = ViewportScale.shared
+        let camera = OffscreenRenderer.Camera(
+            yaw: vs.yaw, pitch: vs.pitch,
+            distance: vs.distance > 0 ? vs.distance : 2.8, pan: vs.pan,
+            orthographic: d.bool(forKey: "orthographicProjection"))
+
+        var options = VideoExporter.Options(
+            width: height * 16 / 9, height: height, fps: fps, stride: stride,
+            format: format, annotations: annotations,
+            orbitDegreesPerSecond: orbit ? orbitSpeed : 0, camera: camera,
+            pointSize: Float(d.object(forKey: "atomPointSize") as? Double ?? 14),
+            background: d.object(forKey: "backgroundBrightness") as? Double ?? 0.05)
+        if format == .gif {   // GIFs get web-sane defaults: small and ≤15 fps
+            options.width = 640
+            options.height = 360
+            options.fps = min(fps, 15)
+        }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [format == .mp4 ? .mpeg4Movie : .gif]
+        let base = sourceName.isEmpty ? "trajectory"
+            : (sourceName as NSString).deletingPathExtension
+        panel.nameFieldStringValue = base + (format == .mp4 ? ".mp4" : ".gif")
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        exportCancelled = false
+        exportProgress = 0
+        let trajectory = frames
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try VideoExporter.export(frames: trajectory, to: url, options: options) { p in
+                    DispatchQueue.main.async { self?.exportProgress = p }
+                    return !(self?.exportCancelled ?? true)
+                }
+                DispatchQueue.main.async {
+                    self?.exportProgress = nil
+                    if self?.exportCancelled == false {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.exportProgress = nil
+                    Self.alert("Video export failed", info: error.localizedDescription)
+                }
+            }
+        }
     }
 
     // MARK: - Playback
