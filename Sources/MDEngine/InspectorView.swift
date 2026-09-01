@@ -106,6 +106,7 @@ struct InspectorView: View {
                     ForEach(histogram.indices, id: \.self) { i in
                         ElementRow(model: model,
                                    element: histogram[i].0, count: histogram[i].1)
+                            .id("\(histogram[i].0)-\(model.styleGeneration)")
                     }
                 }
             }
@@ -166,7 +167,7 @@ struct InspectorView: View {
                     for i in 1...4 {
                         d.set(PaneGroup.defaultPreset(i), forKey: "pane\(i)Preset")
                     }
-                    model.applyViewPreset(.isometric)
+                    model.cameraResetToken += 1   // isometric + home zoom + centered
                     ElementStyleStore.reset(elements: elementNames)
                     model.styleGeneration += 1
                     orthographic = false
