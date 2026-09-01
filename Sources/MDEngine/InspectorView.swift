@@ -44,6 +44,54 @@ struct InspectorView: View {
                 PaneGroup(index: 4, model: model)
             }
 
+            CollapsibleSection("Camera", key: "inspExpCamera", initiallyExpanded: false) {
+                LabeledContent("Orbit speed") {
+                    Slider(value: $orbitSensitivity, in: 2...20)
+                }
+                Button("Reset Camera") { model.cameraResetToken += 1 }
+            }
+
+
+            CollapsibleSection("Timeline grid", key: "inspExpTimeline", initiallyExpanded: false) {
+                Picker("Major marks", selection: $timelineMajorPct) {
+                    ForEach([10, 20, 25, 50], id: \.self) { Text("every \($0)%").tag($0) }
+                }
+                Picker("Minor marks", selection: $timelineMinorPct) {
+                    ForEach([1, 2, 5, 10], id: \.self) { Text("every \($0)%").tag($0) }
+                }
+                Toggle("Frame numbers", isOn: $timelineShowNumbers)
+            }
+
+            CollapsibleSection("Display", key: "inspExpDisplay", initiallyExpanded: false) {
+                LabeledContent("Atom size") {
+                    Slider(value: $atomPointSize, in: 4...32)
+                }
+                LabeledContent("Background") {
+                    Slider(value: $backgroundBrightness, in: 0...0.35)
+                }
+            }
+
+
+            CollapsibleSection("Elements", key: "inspExpElements", initiallyExpanded: true) {
+                let histogram = elementHistogram
+                if histogram.isEmpty {
+                    Text("No atoms loaded").foregroundColor(.secondary)
+                } else {
+                    ForEach(histogram.indices, id: \.self) { i in
+                        LabeledContent {
+                            Text("\(histogram[i].1)").monospacedDigit()
+                        } label: {
+                            Label(histogram[i].0, systemImage: "circle.fill")
+                                .foregroundColor(ElementColors.color(for: histogram[i].0))
+                        }
+                    }
+                }
+            }
+
+            CollapsibleSection("Z-profile", key: "inspExpZProfile", initiallyExpanded: false) {
+                zProfileSection
+            }
+
             CollapsibleSection("Video export", key: "inspExpVideo", initiallyExpanded: false) {
                 Picker("Resolution", selection: $videoHeight) {
                     Text("1080p").tag(1080)
@@ -86,52 +134,6 @@ struct InspectorView: View {
                     }
                     .disabled(model.frames.count < 2)
                 }
-            }
-
-            CollapsibleSection("Timeline grid", key: "inspExpTimeline", initiallyExpanded: false) {
-                Picker("Major marks", selection: $timelineMajorPct) {
-                    ForEach([10, 20, 25, 50], id: \.self) { Text("every \($0)%").tag($0) }
-                }
-                Picker("Minor marks", selection: $timelineMinorPct) {
-                    ForEach([1, 2, 5, 10], id: \.self) { Text("every \($0)%").tag($0) }
-                }
-                Toggle("Frame numbers", isOn: $timelineShowNumbers)
-            }
-
-            CollapsibleSection("Display", key: "inspExpDisplay", initiallyExpanded: false) {
-                LabeledContent("Atom size") {
-                    Slider(value: $atomPointSize, in: 4...32)
-                }
-                LabeledContent("Background") {
-                    Slider(value: $backgroundBrightness, in: 0...0.35)
-                }
-            }
-
-            CollapsibleSection("Camera", key: "inspExpCamera", initiallyExpanded: false) {
-                LabeledContent("Orbit speed") {
-                    Slider(value: $orbitSensitivity, in: 2...20)
-                }
-                Button("Reset Camera") { model.cameraResetToken += 1 }
-            }
-
-            CollapsibleSection("Elements", key: "inspExpElements", initiallyExpanded: true) {
-                let histogram = elementHistogram
-                if histogram.isEmpty {
-                    Text("No atoms loaded").foregroundColor(.secondary)
-                } else {
-                    ForEach(histogram.indices, id: \.self) { i in
-                        LabeledContent {
-                            Text("\(histogram[i].1)").monospacedDigit()
-                        } label: {
-                            Label(histogram[i].0, systemImage: "circle.fill")
-                                .foregroundColor(ElementColors.color(for: histogram[i].0))
-                        }
-                    }
-                }
-            }
-
-            CollapsibleSection("Z-profile", key: "inspExpZProfile", initiallyExpanded: false) {
-                zProfileSection
             }
 
             Section {

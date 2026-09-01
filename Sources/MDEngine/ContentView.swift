@@ -78,29 +78,44 @@ struct ContentView: View {
         if extras.isEmpty {
             mainPane
         } else {
-            // 2-up: side by side; 3–4 views: 2×2 grid, main pane top-left.
-            let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
-            LazyVGrid(columns: columns, spacing: 2) {
-                mainPane.aspectRatio(nil, contentMode: .fill)
-                ForEach(extras) { pane in
-                    MetalView(frames: model.frames,
-                              frameIndex: model.frameIndex,
-                              generation: model.generation,
-                              cameraResetToken: model.cameraResetToken,
-                              preset: pane.preset,
-                              publishesScale: false)
-                        .overlay(alignment: .topLeading) {
-                            Text(pane.preset?.label ?? "Free")
-                                .font(.caption.bold())
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Color.black.opacity(0.35),
-                                            in: RoundedRectangle(cornerRadius: 4))
-                                .foregroundColor(.white.opacity(0.9))
-                                .padding(6)
+            // 2-up: side by side; 3-4 views: 2x2 grid, main pane top-left.
+            // Explicit rows, not LazyVGrid: Metal views have no intrinsic
+            // size, so a lazy grid collapses every row after the first.
+            VStack(spacing: 2) {
+                HStack(spacing: 2) {
+                    mainPane.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    extraPane(extras[0]).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                if extras.count >= 2 {
+                    HStack(spacing: 2) {
+                        extraPane(extras[1]).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        if extras.count >= 3 {
+                            extraPane(extras[2]).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
+                    }
                 }
             }
         }
+    }
+
+    private func extraPane(_ pane: ExtraPane) -> some View {
+        MetalView(frames: model.frames,
+                  frameIndex: model.frameIndex,
+                  generation: model.generation,
+                  cameraResetToken: model.cameraResetToken,
+                  preset: pane.preset,
+                  publishesScale: false)
+            .overlay(alignment: .topLeading) {
+                Text(pane.preset?.label ?? "Free")
+                    .font(.caption.bold())
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.black.opacity(0.35),
+                                in: RoundedRectangle(cornerRadius: 4))
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(6)
+            }
     }
 
     private var mainPane: some View {
