@@ -91,6 +91,9 @@ final class ContentViewModel: ObservableObject {
     /// True while a file parse is in flight (drives the viewport spinner).
     @Published var isLoading = false
 
+    /// Bumped when per-element colors/sizes change (inspector edits).
+    @Published var styleGeneration = 0
+
     /// nil = idle; 0…1 while an export runs (drives the inspector progress bar).
     @Published var exportProgress: Double?
     private var exportCancelled = false
@@ -119,7 +122,8 @@ final class ContentViewModel: ObservableObject {
             format: format, annotations: annotations,
             orbitDegreesPerSecond: orbit ? orbitSpeed : 0, camera: camera,
             pointSize: Float(d.object(forKey: "atomPointSize") as? Double ?? 14),
-            background: d.object(forKey: "backgroundBrightness") as? Double ?? 0.05)
+            background: d.object(forKey: "backgroundBrightness") as? Double ?? 0.05,
+            style: ElementStyleStore.currentStyle())
         if format == .gif {   // GIFs get web-sane defaults: small and ≤15 fps
             options.width = 640
             options.height = 360

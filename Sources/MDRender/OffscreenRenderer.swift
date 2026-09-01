@@ -42,9 +42,11 @@ public final class OffscreenRenderer {
     private let scale: Float
     private let pointSize: Float
     private let background: SIMD3<Double>
+    private let style: AtomStyle
 
     public init?(frames: [[Arv]], width: Int, height: Int,
-                 pointSize: Float = 14, background: Double = 0.05) {
+                 pointSize: Float = 14, background: Double = 0.05,
+                 style: AtomStyle = AtomStyle()) {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
               !frames.isEmpty, frames.contains(where: { !$0.isEmpty }) else { return nil }
@@ -55,6 +57,7 @@ public final class OffscreenRenderer {
         self.frames = frames
         self.pointSize = pointSize
         self.background = SIMD3<Double>(background, background, background + 0.03)
+        self.style = style
 
         // Union bounding box across all frames — one stable scale for the video.
         var minP = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
@@ -111,7 +114,8 @@ public final class OffscreenRenderer {
         let gpuAtoms: [RenderCore.RenderAtom] = frames[i].map { a in
             let p = SIMD3<Float>(Float(a.x), Float(a.y), Float(a.z))
             return RenderCore.RenderAtom(position: (p - center) * scale,
-                                         color: AtomPalette.rgb(for: a.element))
+                                         color: style.color(for: a.element),
+                                         size: style.size(for: a.element))
         }
         guard !gpuAtoms.isEmpty,
               let atomBuffer = device.makeBuffer(

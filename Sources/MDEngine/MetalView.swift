@@ -85,6 +85,8 @@ struct MetalView: NSViewRepresentable {
     /// the preset value itself changes (extra panes switching Top → Front).
     var preset: RenderCore.ViewPreset? = nil
     var presetToken: Int = 0
+    /// Bumped when per-element colors/sizes change; triggers a GPU re-upload.
+    var styleGeneration: Int = 0
     /// Camera-state destination: .shared for the main pane (drives the main
     /// scale bar and video export); a per-pane instance for extra panes.
     var scaleSink: ViewportScale? = ViewportScale.shared
@@ -121,6 +123,10 @@ struct MetalView: NSViewRepresentable {
             context.coordinator.cameraResetToken = cameraResetToken
             context.coordinator.renderer?.resetCamera()
         }
+        if context.coordinator.styleGeneration != styleGeneration {
+            context.coordinator.styleGeneration = styleGeneration
+            context.coordinator.renderer?.reloadStyle()
+        }
         if let preset,
            context.coordinator.presetToken != presetToken
             || context.coordinator.appliedPreset != preset {
@@ -140,5 +146,6 @@ struct MetalView: NSViewRepresentable {
         var cameraResetToken = 0
         var presetToken = -1
         var appliedPreset: RenderCore.ViewPreset?
+        var styleGeneration = 0
     }
 }

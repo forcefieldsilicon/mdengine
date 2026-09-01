@@ -7,12 +7,15 @@ import Foundation
 public enum RenderCore {
 
     /// One vertex per atom; layout must match `Atom` in the shader.
+    /// `size` is the element's relative factor (1 = the global Atom size).
     public struct RenderAtom {
         public var position: SIMD3<Float>
         public var color: SIMD3<Float>
-        public init(position: SIMD3<Float>, color: SIMD3<Float>) {
+        public var size: Float
+        public init(position: SIMD3<Float>, color: SIMD3<Float>, size: Float = 1) {
             self.position = position
             self.color = color
+            self.size = size
         }
     }
 
@@ -147,6 +150,7 @@ public enum RenderCore {
     struct Atom {
         float3 position;
         float3 color;
+        float size;
     };
 
     struct Uniforms {
@@ -167,7 +171,7 @@ public enum RenderCore {
         VSOut out;
         out.position = u.mvp * float4(atoms[id].position, 1.0);
         // Perspective-scaled point size: nearer atoms draw larger.
-        out.point_size = clamp(u.pointSize / max(out.position.w, 0.1), 1.5, u.maxPointSize);
+        out.point_size = clamp(u.pointSize * atoms[id].size / max(out.position.w, 0.1), 1.5, u.maxPointSize);
         out.color = atoms[id].color;
         return out;
     }
@@ -182,6 +186,28 @@ public enum RenderCore {
         return float4(in.color * shade, 1.0);
     }
     """
+}
+
+/// Per-element rendering overrides: colour and relative size factor, keyed by
+/// element token. Unset elements fall back to the CPK palette and factor 1.
+/// The app persists these; video export receives the same style so movies
+/// match the window.
+public struct AtomStyle {
+    public var colors: [String: SIMD3<Float>]
+    public var sizes: [String: Float]
+
+    public init(colors: [String: SIMD3<Float>] = [:], sizes: [String: Float] = [:]) {
+        self.colors = colors
+        self.sizes = sizes
+    }
+
+    public func color(for element: String) -> SIMD3<Float> {
+        colors[element] ?? AtomPalette.rgb(for: element)
+    }
+
+    public func size(for element: String) -> Float {
+        sizes[element] ?? 1
+    }
 }
 
 /// CPK-style element colours (UI-framework-free; the app wraps these in SwiftUI).

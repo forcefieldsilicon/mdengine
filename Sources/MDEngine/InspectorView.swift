@@ -95,13 +95,17 @@ struct InspectorView: View {
                 if histogram.isEmpty {
                     Text("No atoms loaded").foregroundColor(.secondary)
                 } else {
+                    HStack {
+                        Text("Element").font(.caption).foregroundColor(.secondary)
+                        Spacer()
+                        Text("Size ×").font(.caption).foregroundColor(.secondary)
+                            .frame(width: 100)
+                        Text("Count").font(.caption).foregroundColor(.secondary)
+                            .frame(width: 54, alignment: .trailing)
+                    }
                     ForEach(histogram.indices, id: \.self) { i in
-                        LabeledContent {
-                            Text("\(histogram[i].1)").monospacedDigit()
-                        } label: {
-                            Label(histogram[i].0, systemImage: "circle.fill")
-                                .foregroundColor(ElementColors.color(for: histogram[i].0))
-                        }
+                        ElementRow(model: model,
+                                   element: histogram[i].0, count: histogram[i].1)
                     }
                 }
             }
@@ -163,6 +167,8 @@ struct InspectorView: View {
                         d.set(PaneGroup.defaultPreset(i), forKey: "pane\(i)Preset")
                     }
                     model.applyViewPreset(.isometric)
+                    ElementStyleStore.reset(elements: elementNames)
+                    model.styleGeneration += 1
                     orthographic = false
                     atomPointSize = 14
                     orbitSensitivity = 8
@@ -379,4 +385,54 @@ private struct PaneGroup: View {
         }
     }
 
+}
+
+/// One element's row: color well · token · relative size slider · atom count.
+/// Color and size persist per element token and apply to every pane and to
+/// video export; final sprite size = global Atom size × this factor.
+private struct ElementRow: View {
+    @ObservedObject var model: ContentViewModel
+    let element: String
+    let count: Int
+    @State private var color: Color
+    @State private var sizeFactor: Double
+
+    init(model: ContentViewModel, element: String, count: Int) {
+        self.model = model
+        self.element = element
+        self.count = count
+        let rgb = ElementStyleStore.color(for: element)
+        _color = State(initialValue: Color(red: Double(rgb.x), green: Double(rgb.y),
+                                           blue: Double(rgb.z)))
+        _sizeFactor = State(initialValue:
+            UserDefaults.standard.object(forKey: "elemSize.\(element)") as? Double ?? 1)
+    }
+
+    var body: some View {
+        HStack {
+            ColorPicker("", selection: $color, supportsOpacity: false)
+                .labelsHidden()
+                .frame(width: 28)
+                .onChange(of: color) { c in
+                    let n = NSColor(c).usingColorSpace(.sRGB) ?? .white
+                    ElementStyleStore.setColor(SIMD3(Float(n.redComponent),
+                                                     Float(n.greenComponent),
+                                                     Float(n.blueComponent)), for: element)
+                    model.styleGeneration += 1
+                }
+                .help("Atom color for \(element)")
+            Text(element)
+            Spacer()
+            Slider(value: $sizeFactor, in: 0.3...3)
+                .frame(width: 100)
+                .onChange(of: sizeFactor) { f in
+                    ElementStyleStore.setSize(f, for: element)
+                    model.styleGeneration += 1
+                }
+                .help(String(format: "Relative size ×%.2f — multiplied by the global Atom size", sizeFactor))
+            Text("\(count)").monospacedDigit()
+                .frame(width: 54, alignment: .trailing)
+                .foregroundColor(.secondary)
+        }
+    }
 }

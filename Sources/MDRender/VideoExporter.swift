@@ -25,12 +25,14 @@ public enum VideoExporter {
         public var camera: OffscreenRenderer.Camera
         public var pointSize: Float
         public var background: Double
+        public var style: AtomStyle
 
         public init(width: Int = 1920, height: Int = 1080, fps: Int = 30,
                     stride: Int = 0, format: Format = .mp4, annotations: Bool = true,
                     orbitDegreesPerSecond: Double = 0,
                     camera: OffscreenRenderer.Camera = .init(),
-                    pointSize: Float = 14, background: Double = 0.05) {
+                    pointSize: Float = 14, background: Double = 0.05,
+                    style: AtomStyle = AtomStyle()) {
             self.width = width
             self.height = height
             self.fps = fps
@@ -41,6 +43,7 @@ public enum VideoExporter {
             self.camera = camera
             self.pointSize = pointSize
             self.background = background
+            self.style = style
         }
     }
 
@@ -60,7 +63,8 @@ public enum VideoExporter {
         let w = options.width & ~1, h = options.height & ~1
         guard let renderer = OffscreenRenderer(frames: frames, width: w, height: h,
                                                pointSize: options.pointSize,
-                                               background: options.background) else {
+                                               background: options.background,
+                                               style: options.style) else {
             throw NSError(domain: "MDRender", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Could not create the offscreen renderer (no Metal device, or empty trajectory)."])
         }

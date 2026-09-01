@@ -110,7 +110,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         let gpuAtoms: [RenderCore.RenderAtom] = frames[i].map { a in
             let p = SIMD3<Float>(Float(a.x), Float(a.y), Float(a.z))
             return RenderCore.RenderAtom(position: (p - center) * scale,
-                                         color: AtomPalette.rgb(for: a.element))
+                                         color: style.color(for: a.element),
+                                         size: style.size(for: a.element))
         }
         atomCount = gpuAtoms.count
         atomBuffer = gpuAtoms.isEmpty ? nil
@@ -118,6 +119,17 @@ final class Renderer: NSObject, MTKViewDelegate {
                                 length: MemoryLayout<RenderCore.RenderAtom>.stride * gpuAtoms.count,
                                 options: [])
         if cacheBuffers, let buffer = atomBuffer { frameBuffers[i] = buffer }
+    }
+
+    // MARK: - Per-element style
+
+    private var style = ElementStyleStore.currentStyle()
+
+    /// Re-read persisted element overrides and rebuild GPU data.
+    func reloadStyle() {
+        style = ElementStyleStore.currentStyle()
+        frameBuffers.removeAll()
+        showFrame(currentFrame)
     }
 
     // MARK: - Camera controls

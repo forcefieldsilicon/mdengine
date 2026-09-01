@@ -134,7 +134,11 @@ Ar   11.402  4.114  9.882
 ...</pre>
   <p>One frame = a line with the atom count, a comment line, then one
   <code>element&nbsp;x&nbsp;y&nbsp;z</code> row per atom; extra columns are ignored.
-  Elements render in CPK-style colours (Al silver, O red, Ar cyan; off-white otherwise).</p>
+  Elements render in CPK-style colours (Al silver, O red, Ar cyan; off-white
+  otherwise). Inspector ▸ Elements lets you override each element's colour
+  (color well) and relative size (0.3×–3×, multiplied by the global Atom size
+  in Display); overrides persist per element token and apply to every pane and
+  to video export.</p>
 
   <h2>Simulation engine</h2>
   <p>The rendering pipeline is live today. Simulations run through the <code>mdengine</code> CLI or the MCP server's

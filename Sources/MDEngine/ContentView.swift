@@ -111,7 +111,8 @@ struct ContentView: View {
                   generation: model.generation,
                   cameraResetToken: model.cameraResetToken,
                   preset: model.pendingViewPreset,
-                  presetToken: model.viewPresetToken)
+                  presetToken: model.viewPresetToken,
+                  styleGeneration: model.styleGeneration)
             .overlay(alignment: .bottomLeading) {
                 if showScaleBar && pane1ScaleBar && !model.atoms.isEmpty {
                     GeometryReader { geo in
@@ -224,6 +225,7 @@ private struct ExtraPaneView: View {
                   generation: model.generation,
                   cameraResetToken: model.cameraResetToken,
                   preset: pane.preset,
+                  styleGeneration: model.styleGeneration,
                   scaleSink: paneScale)
             .overlay(alignment: .topLeading) {
                 Text(pane.preset?.label ?? "Free")
