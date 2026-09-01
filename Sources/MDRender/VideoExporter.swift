@@ -24,14 +24,15 @@ public enum VideoExporter {
         public var orbitDegreesPerSecond: Double
         public var camera: OffscreenRenderer.Camera
         public var pointSize: Float
-        public var background: Double
+        public var background: SIMD3<Double>
         public var style: AtomStyle
 
         public init(width: Int = 1920, height: Int = 1080, fps: Int = 30,
                     stride: Int = 0, format: Format = .mp4, annotations: Bool = true,
                     orbitDegreesPerSecond: Double = 0,
                     camera: OffscreenRenderer.Camera = .init(),
-                    pointSize: Float = 14, background: Double = 0.05,
+                    pointSize: Float = 14,
+                    background: SIMD3<Double> = SIMD3(0.05, 0.05, 0.08),
                     style: AtomStyle = AtomStyle()) {
             self.width = width
             self.height = height

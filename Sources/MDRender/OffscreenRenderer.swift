@@ -45,7 +45,8 @@ public final class OffscreenRenderer {
     private let style: AtomStyle
 
     public init?(frames: [[Arv]], width: Int, height: Int,
-                 pointSize: Float = 14, background: Double = 0.05,
+                 pointSize: Float = 14,
+                 background: SIMD3<Double> = SIMD3(0.05, 0.05, 0.08),
                  style: AtomStyle = AtomStyle()) {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
@@ -56,7 +57,7 @@ public final class OffscreenRenderer {
         self.height = height
         self.frames = frames
         self.pointSize = pointSize
-        self.background = SIMD3<Double>(background, background, background + 0.03)
+        self.background = background
         self.style = style
 
         // Union bounding box across all frames — one stable scale for the video.

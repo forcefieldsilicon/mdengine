@@ -11,7 +11,13 @@ struct InspectorView: View {
 
     @AppStorage("atomPointSize") private var atomPointSize = 14.0
     @AppStorage("orbitSensitivity") private var orbitSensitivity = 8.0
-    @AppStorage("backgroundBrightness") private var backgroundBrightness = 0.05
+    @AppStorage("backgroundBrightness") private var backgroundBrightness = 0.08
+    @State private var backgroundColor: Color = {
+        let stored = UserDefaults.standard.string(forKey: "backgroundColor") ?? "0.63 0.63 1.0"
+        let p = stored.split(separator: " ").compactMap { Double($0) }
+        return p.count == 3 ? Color(red: p[0], green: p[1], blue: p[2])
+                            : Color(red: 0.63, green: 0.63, blue: 1.0)
+    }()
     @AppStorage("timelineMajorPct") private var timelineMajorPct = 20
     @AppStorage("timelineMinorPct") private var timelineMinorPct = 5
     @AppStorage("timelineShowNumbers") private var timelineShowNumbers = true
@@ -37,28 +43,47 @@ struct InspectorView: View {
                     Text("Orthographic").tag(true)
                 }
                 .pickerStyle(.segmented)
-                Toggle("Scale bar", isOn: $showScaleBar)
-                    .toggleStyle(.checkbox)
-                    .help("Master switch: show a length reference in every pane (exact at the structure's center depth). Each pane keeps its own checkbox under its options.")
-                    .onChange(of: showScaleBar) { on in
-                        guard on else { return }
-                        for i in 1...4 {   // re-arm every pane's bar
-                            UserDefaults.standard.set(true, forKey: "pane\(i)ScaleBar")
+                ZStack {
+                    HStack {
+                        Text("Panes")
+                        Spacer()
+                    }
+                    // Cumulative level indicator: panes accumulate, so
+                    // selecting 3 lights 1-2-3, not just the 3.
+                    HStack(spacing: 3) {
+                        ForEach(1...4, id: \.self) { i in
+                            Button("\(i)") { paneCount = i }
+                                .buttonStyle(.plain)
+                                .frame(width: 32, height: 22)
+                                .background(i <= paneCount ? Color.accentColor
+                                                           : Color.secondary.opacity(0.18),
+                                            in: RoundedRectangle(cornerRadius: 5))
+                                .foregroundColor(i <= paneCount ? .white : .primary)
                         }
                     }
-                Picker("Panes", selection: $paneCount) {
-                    ForEach(1...4, id: \.self) { Text("\($0)").tag($0) }
+                    .help("Viewport layout: 1 = main pane only, up to a 2×2 grid. Hidden panes remember their views.")
                 }
-                .pickerStyle(.segmented)
-                .help("Viewport layout: 1 = main pane only, up to a 2×2 grid. Hidden panes remember their views.")
                 HStack {
                     Text("Pane").font(.caption).foregroundColor(.secondary)
                     Spacer()
                     Text("View").font(.caption).foregroundColor(.secondary)
                         .frame(width: 110)
-                    Text("Bar").font(.caption).foregroundColor(.secondary)
-                        .frame(width: 30)
-                        .help("Scale bar in this pane")
+                    // Master scale-bar checkbox heads its own column, directly
+                    // above the per-pane bar checkboxes.
+                    VStack(spacing: 1) {
+                        Text("Bar").font(.caption).foregroundColor(.secondary)
+                        Toggle("", isOn: $showScaleBar)
+                            .toggleStyle(.checkbox)
+                            .labelsHidden()
+                            .help("Master switch: scale bars in every pane (exact at the structure's center depth)")
+                            .onChange(of: showScaleBar) { on in
+                                guard on else { return }
+                                for i in 1...4 {   // re-arm every pane's bar
+                                    UserDefaults.standard.set(true, forKey: "pane\(i)ScaleBar")
+                                }
+                            }
+                    }
+                    .frame(width: 30)
                 }
                 ForEach(1...max(1, min(4, paneCount)), id: \.self) { i in
                     PaneGroup(index: i, model: model)
@@ -88,7 +113,19 @@ struct InspectorView: View {
                     Slider(value: $atomPointSize, in: 4...32)
                 }
                 LabeledContent("Background") {
-                    Slider(value: $backgroundBrightness, in: 0...0.35)
+                    HStack {
+                        ColorPicker("", selection: $backgroundColor, supportsOpacity: false)
+                            .labelsHidden()
+                            .frame(width: 28)
+                            .help("Background hue — the slider sets its brightness")
+                        Slider(value: $backgroundBrightness, in: 0...0.35)
+                    }
+                }
+                .onChange(of: backgroundColor) { c in
+                    let n = NSColor(c).usingColorSpace(.sRGB) ?? .black
+                    UserDefaults.standard.set(
+                        "\(n.redComponent) \(n.greenComponent) \(n.blueComponent)",
+                        forKey: "backgroundColor")
                 }
             }
 
@@ -176,7 +213,9 @@ struct InspectorView: View {
                     orthographic = false
                     atomPointSize = 14
                     orbitSensitivity = 8
-                    backgroundBrightness = 0.05
+                    backgroundBrightness = 0.08
+                    UserDefaults.standard.removeObject(forKey: "backgroundColor")
+                    backgroundColor = Color(red: 0.63, green: 0.63, blue: 1.0)
                     timelineMajorPct = 20
                     timelineMinorPct = 5
                     timelineShowNumbers = true

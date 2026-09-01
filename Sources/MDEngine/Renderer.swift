@@ -189,6 +189,16 @@ final class Renderer: NSObject, MTKViewDelegate {
                           yaw: yaw, pitch: pitch, pan: pan, roll: roll)
     }
 
+    /// Effective background = stored hue × brightness slider. Defaults
+    /// reproduce the original near-black blue (0.63,0.63,1.0 × 0.08).
+    static func backgroundColor() -> SIMD3<Double> {
+        let brightness = Double(pref("backgroundBrightness", default: 0.08))
+        let stored = UserDefaults.standard.string(forKey: "backgroundColor") ?? "0.63 0.63 1.0"
+        let p = stored.split(separator: " ").compactMap { Double($0) }
+        let hue = p.count == 3 ? SIMD3<Double>(p[0], p[1], p[2]) : SIMD3<Double>(0.63, 0.63, 1.0)
+        return hue * brightness
+    }
+
     /// Settings written by SettingsView via @AppStorage; defaults must match.
     private static func pref(_ key: String, default def: Double) -> Float {
         Float(UserDefaults.standard.object(forKey: key) as? Double ?? def)
@@ -207,8 +217,8 @@ final class Renderer: NSObject, MTKViewDelegate {
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
 
-        let bgBrightness = Double(Renderer.pref("backgroundBrightness", default: 0.05))
-        view.clearColor = MTLClearColorMake(bgBrightness, bgBrightness, bgBrightness + 0.03, 1.0)
+        let bg = Renderer.backgroundColor()
+        view.clearColor = MTLClearColorMake(bg.x, bg.y, bg.z, 1.0)
 
         guard atomCount > 0, let atomBuffer = atomBuffer else {
             encoder.endEncoding()

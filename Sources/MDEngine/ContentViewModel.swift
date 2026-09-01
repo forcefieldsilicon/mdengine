@@ -122,7 +122,7 @@ final class ContentViewModel: ObservableObject {
             format: format, annotations: annotations,
             orbitDegreesPerSecond: orbit ? orbitSpeed : 0, camera: camera,
             pointSize: Float(d.object(forKey: "atomPointSize") as? Double ?? 14),
-            background: d.object(forKey: "backgroundBrightness") as? Double ?? 0.05,
+            background: Renderer.backgroundColor(),
             style: ElementStyleStore.currentStyle())
         if format == .gif {   // GIFs get web-sane defaults: small and ≤15 fps
             options.width = 640
