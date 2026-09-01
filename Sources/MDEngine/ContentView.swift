@@ -5,9 +5,12 @@ import MDRender
 struct ContentView: View {
     @ObservedObject var model: ContentViewModel
     @AppStorage("showScaleBar") private var showScaleBar = true
-    @AppStorage("pane2View") private var pane2View = "off"
-    @AppStorage("pane3View") private var pane3View = "off"
-    @AppStorage("pane4View") private var pane4View = "off"
+    @AppStorage("pane2Enabled") private var pane2Enabled = false
+    @AppStorage("pane3Enabled") private var pane3Enabled = false
+    @AppStorage("pane4Enabled") private var pane4Enabled = false
+    @AppStorage("pane2Preset") private var pane2Preset = "top"
+    @AppStorage("pane3Preset") private var pane3Preset = "top"
+    @AppStorage("pane4Preset") private var pane4Preset = "top"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,8 +61,16 @@ struct ContentView: View {
     }
 
     /// Extra panes chosen in Inspector ▸ View (CAD-style Top/Front/Rear/Bottom).
-    private var extraPanes: [RenderCore.ViewPreset] {
-        [pane2View, pane3View, pane4View].compactMap { RenderCore.ViewPreset(rawValue: $0) }
+    private struct ExtraPane: Identifiable {
+        let id: Int
+        let preset: RenderCore.ViewPreset?   // nil = free camera
+    }
+
+    private var extraPanes: [ExtraPane] {
+        zip([2, 3, 4], zip([pane2Enabled, pane3Enabled, pane4Enabled],
+                           [pane2Preset, pane3Preset, pane4Preset]))
+            .filter { $0.1.0 }
+            .map { ExtraPane(id: $0.0, preset: RenderCore.ViewPreset(rawValue: $0.1.1)) }
     }
 
     @ViewBuilder private var viewportArea: some View {
@@ -71,15 +82,15 @@ struct ContentView: View {
             let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
             LazyVGrid(columns: columns, spacing: 2) {
                 mainPane.aspectRatio(nil, contentMode: .fill)
-                ForEach(extras, id: \.self) { preset in
+                ForEach(extras) { pane in
                     MetalView(frames: model.frames,
                               frameIndex: model.frameIndex,
                               generation: model.generation,
                               cameraResetToken: model.cameraResetToken,
-                              preset: preset,
+                              preset: pane.preset,
                               publishesScale: false)
                         .overlay(alignment: .topLeading) {
-                            Text(preset.label)
+                            Text(pane.preset?.label ?? "Free")
                                 .font(.caption.bold())
                                 .padding(.horizontal, 6).padding(.vertical, 2)
                                 .background(Color.black.opacity(0.35),
@@ -116,20 +127,20 @@ struct ContentView: View {
 
     /// CAD-style view snap (the AutoCAD-cube idea, menu form): Top/Front/… set
     /// the camera to a canonical angle; orbiting afterwards returns to free view.
-    @AppStorage("pane1View") private var pane1View = "free"
+    @AppStorage("pane1Preset") private var pane1Preset = "free"
 
     private var viewMenu: some View {
         Menu {
             ForEach(RenderCore.ViewPreset.allCases, id: \.self) { preset in
                 Button(preset.label) {
                     model.applyViewPreset(preset)
-                    pane1View = preset.rawValue
+                    pane1Preset = preset.rawValue
                 }
             }
             Divider()
             Button("Reset Camera") {
                 model.cameraResetToken += 1
-                pane1View = "free"
+                pane1Preset = "free"
             }
         } label: {
             Label("View", systemImage: "cube")

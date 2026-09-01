@@ -17,10 +17,6 @@ struct InspectorView: View {
     @AppStorage("timelineShowNumbers") private var timelineShowNumbers = true
     @AppStorage("orthographicProjection") private var orthographic = false
     @AppStorage("showScaleBar") private var showScaleBar = true
-    @AppStorage("pane1View") private var pane1View = "free"
-    @AppStorage("pane2View") private var pane2View = "off"
-    @AppStorage("pane3View") private var pane3View = "off"
-    @AppStorage("pane4View") private var pane4View = "off"
     @AppStorage("videoHeight") private var videoHeight = 1080
     @AppStorage("videoFPS") private var videoFPS = 30
     @AppStorage("videoStride") private var videoStride = 0
@@ -42,20 +38,10 @@ struct InspectorView: View {
                 .pickerStyle(.segmented)
                 Toggle("Scale bar", isOn: $showScaleBar)
                     .help("Show a length reference in the viewport (exact at the structure's center depth)")
-                Picker("Pane 1 (main)", selection: $pane1View) {
-                    Text("Free").tag("free")
-                    ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
-                        Text($0.label).tag($0.rawValue)
-                    }
-                }
-                .onChange(of: pane1View) { value in
-                    if let preset = RenderCore.ViewPreset(rawValue: value) {
-                        model.applyViewPreset(preset)
-                    }
-                }
-                panePicker("Pane 2", $pane2View)
-                panePicker("Pane 3", $pane3View)
-                panePicker("Pane 4", $pane4View)
+                PaneGroup(index: 1, model: model)
+                PaneGroup(index: 2, model: model)
+                PaneGroup(index: 3, model: model)
+                PaneGroup(index: 4, model: model)
             }
 
             CollapsibleSection("Video export", key: "inspExpVideo", initiallyExpanded: false) {
@@ -164,15 +150,6 @@ struct InspectorView: View {
         .formStyle(.grouped)
         .onAppear { defaultZElements() }
         .onChange(of: elementNames) { _ in defaultZElements() }
-    }
-
-    private func panePicker(_ label: String, _ selection: Binding<String>) -> some View {
-        Picker(label, selection: selection) {
-            Text("Off").tag("off")
-            ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
-                Text($0.label).tag($0.rawValue)
-            }
-        }
     }
 
     private var videoDurationText: String {
@@ -289,5 +266,58 @@ private struct CollapsibleSection<Content: View>: View {
                 Text(title).font(.headline)
             }
         }
+    }
+}
+
+/// One viewport pane's controls: chevron-expandable, with an on/off toggle
+/// and its view preset underneath. Pane 1 is the main viewport (always on).
+private struct PaneGroup: View {
+    let index: Int
+    @ObservedObject var model: ContentViewModel
+    @AppStorage private var expanded: Bool
+    @AppStorage private var enabled: Bool
+    @AppStorage private var preset: String
+
+    init(index: Int, model: ContentViewModel) {
+        self.index = index
+        self.model = model
+        _expanded = AppStorage(wrappedValue: false, "pane\(index)Expanded")
+        _enabled = AppStorage(wrappedValue: index == 1, "pane\(index)Enabled")
+        _preset = AppStorage(wrappedValue: index == 1 ? "free" : "top", "pane\(index)Preset")
+    }
+
+    private var isMain: Bool { index == 1 }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            Toggle("On", isOn: $enabled)
+                .disabled(isMain)
+                .help(isMain ? "Pane 1 is the main viewport — always on"
+                             : "Show this pane in the viewport grid")
+            Picker("View", selection: $preset) {
+                Text("Free").tag("free")
+                ForEach(RenderCore.ViewPreset.allCases, id: \.rawValue) {
+                    Text($0.label).tag($0.rawValue)
+                }
+            }
+            .onChange(of: preset) { value in
+                if isMain, let p = RenderCore.ViewPreset(rawValue: value) {
+                    model.applyViewPreset(p)
+                }
+            }
+            .disabled(!isMain && !enabled)
+        } label: {
+            HStack {
+                Text(isMain ? "Pane 1 (main)" : "Pane \(index)")
+                Spacer()
+                Text(statusText).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private var statusText: String {
+        let view = RenderCore.ViewPreset(rawValue: preset)?.label ?? "Free"
+        if isMain { return view }
+        return enabled ? view : "Off"
     }
 }
