@@ -6,8 +6,13 @@ import MDRender
 /// Exact at the structure's center depth; in perspective, nearer/farther atoms
 /// deviate slightly (orthographic is depth-true everywhere).
 struct ScaleBarView: View {
-    @ObservedObject private var scale = ViewportScale.shared
+    @ObservedObject var scale: ViewportScale
     let viewportHeight: CGFloat
+
+    init(viewportHeight: CGFloat, scale: ViewportScale = .shared) {
+        self.viewportHeight = viewportHeight
+        self.scale = scale
+    }
 
     private var angstromsPerPoint: Double? {
         guard scale.distance > 0, scale.angstromsPerModelUnit > 0,

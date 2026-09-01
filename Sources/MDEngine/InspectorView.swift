@@ -37,7 +37,14 @@ struct InspectorView: View {
                 }
                 .pickerStyle(.segmented)
                 Toggle("Scale bar", isOn: $showScaleBar)
-                    .help("Show a length reference in the viewport (exact at the structure's center depth)")
+                    .toggleStyle(.checkbox)
+                    .help("Master switch: show a length reference in every pane (exact at the structure's center depth). Each pane keeps its own checkbox under its options.")
+                    .onChange(of: showScaleBar) { on in
+                        guard on else { return }
+                        for i in 1...4 {   // re-arm every pane's bar
+                            UserDefaults.standard.set(true, forKey: "pane\(i)ScaleBar")
+                        }
+                    }
                 PaneGroup(index: 1, model: model)
                 PaneGroup(index: 2, model: model)
                 PaneGroup(index: 3, model: model)
@@ -289,6 +296,8 @@ private struct PaneGroup: View {
     @AppStorage private var expanded: Bool
     @AppStorage private var enabled: Bool
     @AppStorage private var preset: String
+    @AppStorage private var scaleBar: Bool
+    @AppStorage("showScaleBar") private var showScaleBar = true
 
     init(index: Int, model: ContentViewModel) {
         self.index = index
@@ -296,6 +305,7 @@ private struct PaneGroup: View {
         _expanded = AppStorage(wrappedValue: false, "pane\(index)Expanded")
         _enabled = AppStorage(wrappedValue: index == 1, "pane\(index)Enabled")
         _preset = AppStorage(wrappedValue: PaneGroup.defaultPreset(index), "pane\(index)Preset")
+        _scaleBar = AppStorage(wrappedValue: true, "pane\(index)ScaleBar")
     }
 
     private var isMain: Bool { index == 1 }
@@ -317,6 +327,11 @@ private struct PaneGroup: View {
             if isMain || enabled {
                 DisclosureGroup(isExpanded: $expanded) {
                     viewPicker
+                    Toggle("Scale bar", isOn: $scaleBar)
+                        .toggleStyle(.checkbox)
+                        .disabled(!showScaleBar)
+                        .help(showScaleBar ? "Show the scale bar in this pane"
+                                           : "Turn on the master Scale bar checkbox above first")
                 } label: {
                     headerRow(expandsOnTap: true)
                 }

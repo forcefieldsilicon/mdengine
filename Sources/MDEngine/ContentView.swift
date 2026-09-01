@@ -5,6 +5,7 @@ import MDRender
 struct ContentView: View {
     @ObservedObject var model: ContentViewModel
     @AppStorage("showScaleBar") private var showScaleBar = true
+    @AppStorage("pane1ScaleBar") private var pane1ScaleBar = true
     @AppStorage("pane2Enabled") private var pane2Enabled = false
     @AppStorage("pane3Enabled") private var pane3Enabled = false
     @AppStorage("pane4Enabled") private var pane4Enabled = false
@@ -61,7 +62,7 @@ struct ContentView: View {
     }
 
     /// Extra panes chosen in Inspector ▸ View (CAD-style Top/Front/Rear/Bottom).
-    private struct ExtraPane: Identifiable {
+    struct ExtraPane: Identifiable {
         let id: Int
         let preset: RenderCore.ViewPreset?   // nil = free camera
     }
@@ -101,21 +102,7 @@ struct ContentView: View {
     }
 
     private func extraPane(_ pane: ExtraPane) -> some View {
-        MetalView(frames: model.frames,
-                  frameIndex: model.frameIndex,
-                  generation: model.generation,
-                  cameraResetToken: model.cameraResetToken,
-                  preset: pane.preset,
-                  publishesScale: false)
-            .overlay(alignment: .topLeading) {
-                Text(pane.preset?.label ?? "Free")
-                    .font(.caption.bold())
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.black.opacity(0.35),
-                                in: RoundedRectangle(cornerRadius: 4))
-                    .foregroundColor(.white.opacity(0.9))
-                    .padding(6)
-            }
+        ExtraPaneView(model: model, pane: pane)
     }
 
     private var mainPane: some View {
@@ -126,7 +113,7 @@ struct ContentView: View {
                   preset: model.pendingViewPreset,
                   presetToken: model.viewPresetToken)
             .overlay(alignment: .bottomLeading) {
-                if showScaleBar && !model.atoms.isEmpty {
+                if showScaleBar && pane1ScaleBar && !model.atoms.isEmpty {
                     GeometryReader { geo in
                         ScaleBarView(viewportHeight: geo.size.height)
                             .frame(maxWidth: .infinity, maxHeight: .infinity,
@@ -203,6 +190,50 @@ struct ContentView: View {
         .font(.callout)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+}
+
+/// One extra viewport pane: its own camera-state publisher so its scale bar
+/// tracks its own zoom, plus its own scale-bar preference.
+private struct ExtraPaneView: View {
+    @ObservedObject var model: ContentViewModel
+    let pane: ContentView.ExtraPane
+    @StateObject private var paneScale = ViewportScale()
+    @AppStorage("showScaleBar") private var showScaleBar = true
+    @AppStorage private var paneScaleBar: Bool
+
+    init(model: ContentViewModel, pane: ContentView.ExtraPane) {
+        self.model = model
+        self.pane = pane
+        _paneScaleBar = AppStorage(wrappedValue: true, "pane\(pane.id)ScaleBar")
+    }
+
+    var body: some View {
+        MetalView(frames: model.frames,
+                  frameIndex: model.frameIndex,
+                  generation: model.generation,
+                  cameraResetToken: model.cameraResetToken,
+                  preset: pane.preset,
+                  scaleSink: paneScale)
+            .overlay(alignment: .topLeading) {
+                Text(pane.preset?.label ?? "Free")
+                    .font(.caption.bold())
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.black.opacity(0.35),
+                                in: RoundedRectangle(cornerRadius: 4))
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(6)
+            }
+            .overlay(alignment: .bottomLeading) {
+                if showScaleBar && paneScaleBar && !model.atoms.isEmpty {
+                    GeometryReader { geo in
+                        ScaleBarView(viewportHeight: geo.size.height, scale: paneScale)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: .bottomLeading)
+                            .padding(12)
+                    }
+                }
+            }
     }
 }
 

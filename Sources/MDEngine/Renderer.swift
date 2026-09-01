@@ -166,15 +166,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         publishViewportScale()
     }
 
-    /// Extra panes render with their own cameras; only the primary view
-    /// publishes, so the scale bar and video export track the main camera.
-    var publishesViewportScale = true
+    /// Where this renderer's camera state goes: the main pane publishes to
+    /// ViewportScale.shared (scale bar + video export); each extra pane gets
+    /// its own instance so its scale bar tracks its own zoom. nil = nobody.
+    var scaleSink: ViewportScale? = ViewportScale.shared
 
     private func publishViewportScale() {
-        guard publishesViewportScale else { return }
-        ViewportScale.shared.update(distance: distance,
-                                    angstromsPerModelUnit: scale > 0 ? 1 / scale : 0,
-                                    yaw: yaw, pitch: pitch, pan: pan, roll: roll)
+        scaleSink?.update(distance: distance,
+                          angstromsPerModelUnit: scale > 0 ? 1 / scale : 0,
+                          yaw: yaw, pitch: pitch, pan: pan, roll: roll)
     }
 
     /// Settings written by SettingsView via @AppStorage; defaults must match.

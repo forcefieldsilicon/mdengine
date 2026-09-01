@@ -85,8 +85,9 @@ struct MetalView: NSViewRepresentable {
     /// the preset value itself changes (extra panes switching Top → Front).
     var preset: RenderCore.ViewPreset? = nil
     var presetToken: Int = 0
-    /// Only the primary view publishes camera state (scale bar, video export).
-    var publishesScale: Bool = true
+    /// Camera-state destination: .shared for the main pane (drives the main
+    /// scale bar and video export); a per-pane instance for extra panes.
+    var scaleSink: ViewportScale? = ViewportScale.shared
 
     func makeNSView(context: Context) -> MTKView {
         let device = MTLCreateSystemDefaultDevice()!
@@ -96,7 +97,7 @@ struct MetalView: NSViewRepresentable {
         view.delegate = renderer
         view.renderer = renderer
 
-        renderer.publishesViewportScale = publishesScale
+        renderer.scaleSink = scaleSink
         context.coordinator.renderer = renderer
         // AppKit can destroy and recreate this NSView (window restoration,
         // re-hosting) while the SAME coordinator survives. A fresh renderer
