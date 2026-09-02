@@ -4,6 +4,7 @@ import CoreGraphics
 import CoreText
 import ImageIO
 import UniformTypeIdentifiers
+import simd
 import LAMMPSCore
 
 /// Turns a trajectory into an MP4 (H.264) or animated GIF through the shared
@@ -106,6 +107,66 @@ public enum VideoExporter {
                                           camera: OffscreenRenderer.Camera, height: Int) -> Double {
         let visibleModel = 2 * Double(camera.distance) * tan(Double(RenderCore.fovY) / 2)
         return visibleModel * Double(renderer.angstromsPerModelUnit) / Double(height)
+    }
+
+    /// Render one trajectory frame to a PNG (same camera/style/annotation
+    /// options as video). Returns the pixel size written.
+    @discardableResult
+    public static func exportPNG(frames: [[Arv]], frameIndex: Int, to url: URL,
+                                 options: Options) throws -> (width: Int, height: Int) {
+        let w = options.width & ~1, h = options.height & ~1
+        guard let renderer = OffscreenRenderer(frames: frames, width: w, height: h,
+                                               pointSize: options.pointSize,
+                                               background: options.background,
+                                               style: options.style) else {
+            throw NSError(domain: "MDRender", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Could not create the offscreen renderer (no Metal device, or empty trajectory)."])
+        }
+        let i = max(0, min(frames.count - 1, frameIndex))
+        guard var bytes = renderer.renderBGRA(frameIndex: i, camera: options.camera) else {
+            throw NSError(domain: "MDRender", code: 7, userInfo: [
+                NSLocalizedDescriptionKey: "Render failed."])
+        }
+        if options.annotations {
+            annotate(&bytes, width: w, height: h, frame: i + 1, of: frames.count,
+                     angstromsPerPixel: angstromsPerPixel(renderer: renderer,
+                                                          camera: options.camera, height: h))
+        }
+        guard let image = cgImage(bytes, w, h),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL,
+                                                         UTType.png.identifier as CFString, 1, nil) else {
+            throw NSError(domain: "MDRender", code: 8, userInfo: [
+                NSLocalizedDescriptionKey: "Could not create PNG at \(url.path)"])
+        }
+        try? FileManager.default.removeItem(at: url)
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            throw NSError(domain: "MDRender", code: 9, userInfo: [
+                NSLocalizedDescriptionKey: "PNG finalize failed"])
+        }
+        return (w, h)
+    }
+
+    /// "Best visibility" auto-style: the most abundant element is the
+    /// substrate and keeps its palette color at 1×; every minority species is
+    /// enlarged (1.8×) and, if its palette color reads close to the
+    /// substrate's, recolored to contrast (red, else cyan).
+    public static func contrastStyle(for frame: [Arv]) -> AtomStyle {
+        var counts: [String: Int] = [:]
+        for a in frame { counts[a.element, default: 0] += 1 }
+        guard let majority = counts.max(by: { $0.value < $1.value })?.key else { return AtomStyle() }
+        let majorityColor = AtomPalette.rgb(for: majority)
+        var style = AtomStyle()
+        let red = SIMD3<Float>(1.0, 0.2, 0.18)
+        let cyan = SIMD3<Float>(0.2, 0.9, 1.0)
+        for element in counts.keys where element != majority {
+            style.sizes[element] = 1.8
+            let own = AtomPalette.rgb(for: element)
+            if simd_distance(own, majorityColor) < 0.45 {
+                style.colors[element] = simd_distance(majorityColor, red) < 0.6 ? cyan : red
+            }
+        }
+        return style
     }
 
     // MARK: - MP4

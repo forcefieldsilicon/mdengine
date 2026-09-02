@@ -59,6 +59,9 @@ or in Claude Desktop's `claude_desktop_config.json`:
 | Tool | Does |
 |---|---|
 | `trajectory_info` | Frames, atom counts, per-atom fields, elements, bbox, charge range |
+| `z_profile` | Deposition/oxidation depth analysis: substrate surface plane, probe penetration depths (min/mean/max), at-surface & in-flight counts, bound-probe charge, z histogram |
+| `render_video` | Trajectory → MP4 (H.264) or animated GIF via the Metal renderer: camera angles, stride, cinematic orbit, baked scale-bar/frame annotations, per-element `colors`/`sizes`, `style: "contrast"` auto-visibility |
+| `render_image` | One frame → PNG with the same camera/style options — lets an agent *see* a simulation state |
 | `export_frame` | One frame → XYZ; `charges: true` → extended-XYZ with the q column |
 | `decimate` | Keep every Nth frame (final frame always kept) |
 | `submit_lammps` | Detached LAMMPS job: survives the server exiting and machine display-sleep (`caffeinate`), exit code recorded unattended |
