@@ -99,7 +99,10 @@ func findLAMMPS() -> String? {
        FileManager.default.isExecutableFile(atPath: env) {
         return env
     }
-    let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    // Always probe the standard install dirs too: GUI-launched processes
+    // get a minimal PATH without Homebrew.
+    let path = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin"
     for name in ["lmp_mpi", "lmp_serial", "lmp"] {
         for dir in path.split(separator: ":") {
             let candidate = "\(dir)/\(name)"

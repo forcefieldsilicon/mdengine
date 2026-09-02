@@ -69,7 +69,10 @@ func performanceCores() -> Int {
 func findLAMMPS() -> String? {
     if let env = ProcessInfo.processInfo.environment["MDENGINE_LMP"],
        FileManager.default.isExecutableFile(atPath: env) { return env }
-    let path = ProcessInfo.processInfo.environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin"
+    // GUI-launched MCP hosts (Claude Desktop) pass a minimal PATH without
+    // Homebrew — always probe the standard install dirs as well.
+    let path = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin"
     for name in ["lmp_mpi", "lmp_serial", "lmp"] {
         for dir in path.split(separator: ":") {
             let c = "\(dir)/\(name)"
