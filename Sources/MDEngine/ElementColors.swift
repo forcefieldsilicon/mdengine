@@ -1,44 +1,56 @@
 import SwiftUI
+import MDRender
 
-/// CPK-style element colours shared by the Metal renderer and the SwiftUI chrome.
+/// SwiftUI face of the shared CPK palette (AtomPalette in MDRender).
 enum ElementColors {
-    static func rgb(for element: String) -> SIMD3<Float> {
-        switch element {
-        case "H":  return SIMD3<Float>(0.95, 0.95, 0.95)
-        case "C":  return SIMD3<Float>(0.56, 0.56, 0.56)
-        case "N":  return SIMD3<Float>(0.30, 0.42, 0.93)
-        case "O":  return SIMD3<Float>(1.00, 0.20, 0.18)
-        case "Al": return SIMD3<Float>(0.75, 0.76, 0.80)
-        case "Si": return SIMD3<Float>(0.94, 0.78, 0.63)
-        case "Ar": return SIMD3<Float>(0.50, 0.82, 0.89)
-        case "Fe": return SIMD3<Float>(0.88, 0.40, 0.20)
-        case "Cu": return SIMD3<Float>(0.78, 0.50, 0.20)
-        default:
-            // Native dumps without an element column carry numeric type tokens;
-            // give each unknown token a stable, distinct colour.
-            var h: UInt32 = 2_166_136_261
-            for b in element.utf8 { h = (h ^ UInt32(b)) &* 16_777_619 }
-            let hue = Float(h % 360) / 360
-            return hsv(hue, 0.55, 0.88)
-        }
-    }
-
-    private static func hsv(_ h: Float, _ s: Float, _ v: Float) -> SIMD3<Float> {
-        let i = Int(h * 6) % 6
-        let f = h * 6 - Float(Int(h * 6))
-        let p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s)
-        switch i {
-        case 0: return SIMD3<Float>(v, t, p)
-        case 1: return SIMD3<Float>(q, v, p)
-        case 2: return SIMD3<Float>(p, v, t)
-        case 3: return SIMD3<Float>(p, q, v)
-        case 4: return SIMD3<Float>(t, p, v)
-        default: return SIMD3<Float>(v, p, q)
-        }
-    }
+    static func rgb(for element: String) -> SIMD3<Float> { ElementStyleStore.color(for: element) }
 
     static func color(for element: String) -> Color {
         let c = rgb(for: element)
         return Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+    }
+}
+
+/// Persisted per-element style overrides (UserDefaults-backed):
+/// `elemColor.<token>` = "r g b" (0…1 floats), `elemSize.<token>` = factor.
+enum ElementStyleStore {
+    static func currentStyle() -> AtomStyle {
+        var colors: [String: SIMD3<Float>] = [:]
+        var sizes: [String: Float] = [:]
+        for (key, value) in UserDefaults.standard.dictionaryRepresentation() {
+            if key.hasPrefix("elemColor."), let s = value as? String {
+                let p = s.split(separator: " ").compactMap { Float($0) }
+                if p.count == 3 { colors[String(key.dropFirst(10))] = SIMD3(p[0], p[1], p[2]) }
+            } else if key.hasPrefix("elemSize."), let d = value as? Double {
+                sizes[String(key.dropFirst(9))] = Float(d)
+            }
+        }
+        return AtomStyle(colors: colors, sizes: sizes)
+    }
+
+    static func setColor(_ rgb: SIMD3<Float>, for element: String) {
+        UserDefaults.standard.set("\(rgb.x) \(rgb.y) \(rgb.z)", forKey: "elemColor.\(element)")
+    }
+
+    static func setSize(_ factor: Double, for element: String) {
+        UserDefaults.standard.set(factor, forKey: "elemSize.\(element)")
+    }
+
+    static func reset(elements: [String]) {
+        for e in elements {
+            UserDefaults.standard.removeObject(forKey: "elemColor.\(e)")
+            UserDefaults.standard.removeObject(forKey: "elemSize.\(e)")
+        }
+    }
+
+    /// Restore Defaults resets sizes but keeps the user's colors.
+    static func resetSizes(elements: [String]) {
+        for e in elements {
+            UserDefaults.standard.removeObject(forKey: "elemSize.\(e)")
+        }
+    }
+
+    static func color(for element: String) -> SIMD3<Float> {
+        currentStyle().color(for: element)
     }
 }

@@ -74,6 +74,9 @@ struct AppCommands: Commands {
             Button("Export File…") { model.exportFilePanel() }
                 .keyboardShortcut("e")
                 .disabled(model.atoms.isEmpty)
+            Button("Export Video…") { model.exportVideo(format: .mp4) }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(model.frames.count < 2)
         }
         CommandGroup(after: .pasteboard) {
             Divider()

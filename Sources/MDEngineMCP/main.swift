@@ -7,6 +7,7 @@
 
 import Foundation
 import LAMMPSCore
+import MDRender
 
 // MARK: - JSON-RPC plumbing
 
@@ -48,7 +49,12 @@ func readText(path: String) throws -> String {
 }
 
 func parseFrames(path: String) throws -> [[Arv]] {
-    let frames = TrajectoryReader.parseFrames(try readText(path: path))
+    guard FileManager.default.fileExists(atPath: path) else { throw err("no such file: \(path)") }
+    let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+    guard (size ?? 0) < 2_000_000_000 else {
+        throw err("\(path) is \((size ?? 0) / 1_000_000) MB (limit 2 GB) — decimate first")
+    }
+    let frames = try TrajectoryReader.parseFrames(contentsOf: URL(fileURLWithPath: path))
     guard !frames.isEmpty else { throw err("no complete frames in \(path)") }
     return frames
 }
@@ -225,6 +231,43 @@ let toolDefs: [[String: Any]] = [
                                     "substrate": ["type": "string", "description": "Substrate element/type token (default: most abundant)"],
                                     "probe": ["type": "string", "description": "Deposited-species element/type token (default: second most abundant)"]],
                      "required": ["path"]]],
+    ["name": "render_video",
+     "description": "Render a trajectory into an MP4 (H.264) or animated GIF via the same Metal renderer the app uses. Annotations (scale bar + frame counter) baked by default. Camera defaults to the home view; pass yaw/pitch degrees to frame the shot (front view of a z-up slab: pitch -90). Stride defaults to ~15 s of video. Synchronous — a long trajectory at 4K can take minutes.",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string", "description": "Trajectory file"],
+                                    "out": ["type": "string", "description": "Output .mp4 or .gif path (format follows the extension)"],
+                                    "width": ["type": "integer", "description": "Pixels (default 1920; GIF default 640)"],
+                                    "height": ["type": "integer", "description": "Pixels (default 1080; GIF default 360)"],
+                                    "fps": ["type": "integer", "description": "Video frame rate (default 30; GIF capped 15)"],
+                                    "stride": ["type": "integer", "description": "Render every Nth trajectory frame (default: auto for ~15 s)"],
+                                    "yaw_deg": ["type": "number", "description": "Camera yaw in degrees (default 0)"],
+                                    "pitch_deg": ["type": "number", "description": "Camera pitch in degrees (default 0 = top view for z-up data; -90 = front)"],
+                                    "distance": ["type": "number", "description": "Camera distance in model units (default 2.8; smaller = closer)"],
+                                    "orthographic": ["type": "boolean", "description": "Orthographic projection (default false)"],
+                                    "orbit_dps": ["type": "number", "description": "Cinematic yaw rotation, degrees per second of video (default 0)"],
+                                    "annotations": ["type": "boolean", "description": "Bake scale bar + frame counter (default true)"],
+                                    "elements": ["type": "string", "description": "Map numeric type tokens to elements by position, e.g. 'O,Al' (type 1→O red, 2→Al silver) — colors follow the element"],
+                                    "style": ["type": "string", "description": "'contrast': auto best-visibility — minority species enlarged 1.8× and recolored to pop against the substrate"],
+                                    "colors": ["type": "string", "description": "Per-element colors, e.g. 'O=red,Al=#3366ff' (named colors or #rrggbb); overrides palette/style"],
+                                    "sizes": ["type": "string", "description": "Per-element relative sizes, e.g. 'O=1.8,Al=1'"]],
+                     "required": ["path", "out"]]],
+    ["name": "render_image",
+     "description": "Render ONE trajectory frame to a PNG through the same Metal renderer — lets an agent SEE a simulation state. Same camera/style/annotation arguments as render_video; frame selects which snapshot.",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string", "description": "Trajectory file"],
+                                    "out": ["type": "string", "description": "Output .png path"],
+                                    "frame": ["type": "string", "description": "'first', 'last' (default), or a 0-based index"],
+                                    "width": ["type": "integer", "description": "Pixels (default 1280)"],
+                                    "height": ["type": "integer", "description": "Pixels (default 960)"],
+                                    "yaw_deg": ["type": "number"], "pitch_deg": ["type": "number", "description": "0 = top view for z-up data; -90 = front"],
+                                    "distance": ["type": "number", "description": "Camera distance (default 2.8; smaller = closer)"],
+                                    "orthographic": ["type": "boolean"],
+                                    "annotations": ["type": "boolean", "description": "Scale bar + frame counter (default true)"],
+                                    "elements": ["type": "string", "description": "Type-token→element mapping, e.g. 'O,Al'"],
+                                    "style": ["type": "string", "description": "'contrast' auto best-visibility preset"],
+                                    "colors": ["type": "string", "description": "'O=red,Al=#3366ff'"],
+                                    "sizes": ["type": "string", "description": "'O=1.8'"]],
+                     "required": ["path", "out"]]],
     ["name": "export_frame",
      "description": "Write one frame of a trajectory to a new plain-XYZ file.",
      "inputSchema": ["type": "object",
@@ -278,6 +321,70 @@ let toolDefs: [[String: Any]] = [
                                     "threads": ["type": "integer", "description": "OpenMP threads (default: performance-core count)"]],
                      "required": ["input"]]],
 ]
+
+// MARK: - Render helpers (render_video / render_image)
+
+let namedColors: [String: SIMD3<Float>] = [
+    "red": SIMD3(1.0, 0.2, 0.18), "green": SIMD3(0.2, 0.85, 0.3),
+    "blue": SIMD3(0.25, 0.45, 1.0), "yellow": SIMD3(1.0, 0.85, 0.2),
+    "orange": SIMD3(1.0, 0.55, 0.1), "cyan": SIMD3(0.2, 0.9, 1.0),
+    "magenta": SIMD3(1.0, 0.3, 0.9), "white": SIMD3(0.95, 0.95, 0.95),
+    "silver": SIMD3(0.75, 0.76, 0.8), "gray": SIMD3(0.5, 0.5, 0.5),
+    "black": SIMD3(0.08, 0.08, 0.08), "purple": SIMD3(0.6, 0.35, 0.95),
+]
+
+func parseColor(_ spec: String) throws -> SIMD3<Float> {
+    let t = spec.lowercased().trimmingCharacters(in: .whitespaces)
+    if let c = namedColors[t] { return c }
+    if t.hasPrefix("#"), t.count == 7,
+       let v = UInt32(t.dropFirst(), radix: 16) {
+        return SIMD3(Float((v >> 16) & 0xFF) / 255, Float((v >> 8) & 0xFF) / 255,
+                     Float(v & 0xFF) / 255)
+    }
+    throw err("unknown color '\(spec)' — use \(namedColors.keys.sorted().joined(separator: "/")) or #rrggbb")
+}
+
+/// Style from tool args: `style: "contrast"` preset, then explicit
+/// `colors: "O=red,Al=#3366ff"` / `sizes: "O=1.8"` override on top.
+func parseStyle(_ a: [String: Any], frame: [Arv]) throws -> AtomStyle {
+    var style = AtomStyle()
+    if let preset = a["style"] as? String {
+        guard preset == "contrast" else { throw err("unknown style '\(preset)' — only 'contrast'") }
+        style = VideoExporter.contrastStyle(for: frame)
+    }
+    if let spec = a["colors"] as? String {
+        for pair in spec.split(separator: ",") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            guard kv.count == 2 else { throw err("colors must be 'Elem=color,...' — got '\(pair)'") }
+            style.colors[kv[0].trimmingCharacters(in: .whitespaces)] = try parseColor(String(kv[1]))
+        }
+    }
+    if let spec = a["sizes"] as? String {
+        for pair in spec.split(separator: ",") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            guard kv.count == 2, let f = Float(kv[1].trimmingCharacters(in: .whitespaces)),
+                  f > 0.05, f <= 10 else {
+                throw err("sizes must be 'Elem=factor,...' with 0.05<factor<=10 — got '\(pair)'")
+            }
+            style.sizes[kv[0].trimmingCharacters(in: .whitespaces)] = f
+        }
+    }
+    return style
+}
+
+func parseCamera(_ a: [String: Any]) -> OffscreenRenderer.Camera {
+    OffscreenRenderer.Camera(
+        yaw: Float((a["yaw_deg"] as? Double ?? 0) * .pi / 180),
+        pitch: Float((a["pitch_deg"] as? Double ?? 0) * .pi / 180),
+        distance: Float(a["distance"] as? Double ?? 2.8),
+        orthographic: a["orthographic"] as? Bool ?? false)
+}
+
+func mappedFrames(_ a: [String: Any], _ frames: [[Arv]]) -> [[Arv]] {
+    guard let spec = a["elements"] as? String else { return frames }
+    return frames.mappingElements(
+        spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+}
 
 // MARK: - Tool implementations
 
@@ -352,6 +459,67 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
                                 String(repeating: "#", count: min(60, bin.count))))
         }
         return lines.joined(separator: "\n")
+
+    case "render_video":
+        guard let path = a["path"] as? String, let out = a["out"] as? String else {
+            throw err("invalid arguments: path, out")
+        }
+        var vframes = try parseFrames(path: path)
+        guard vframes.count > 1 else { throw err("trajectory has fewer than 2 frames") }
+        if let spec = a["elements"] as? String {
+            vframes = vframes.mappingElements(
+                spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        }
+        let isGIF = out.lowercased().hasSuffix(".gif")
+        guard isGIF || out.lowercased().hasSuffix(".mp4") else {
+            throw err("out must end in .mp4 or .gif")
+        }
+        let camera = parseCamera(a)
+        let style = try parseStyle(a, frame: vframes.last ?? [])
+        let options = VideoExporter.Options(
+            width: a["width"] as? Int ?? (isGIF ? 640 : 1920),
+            height: a["height"] as? Int ?? (isGIF ? 360 : 1080),
+            fps: min(a["fps"] as? Int ?? 30, isGIF ? 15 : 60),
+            stride: a["stride"] as? Int ?? 0,
+            format: isGIF ? .gif : .mp4,
+            annotations: a["annotations"] as? Bool ?? true,
+            orbitDegreesPerSecond: a["orbit_dps"] as? Double ?? 0,
+            camera: camera,
+            style: style)
+        let start = Date()
+        let written = try VideoExporter.export(frames: vframes, to: URL(fileURLWithPath: out),
+                                               options: options)
+        let size = (try? FileManager.default.attributesOfItem(atPath: out)[.size] as? Int) ?? 0
+        return String(format: "wrote %@: %d video frames (%.1f s at %d fps) from %d trajectory frames, %.1f MB, rendered in %.0f s",
+                      out, written, Double(written) / Double(options.fps), options.fps,
+                      vframes.count, Double(size ?? 0) / 1_000_000, -start.timeIntervalSinceNow)
+
+    case "render_image":
+        guard let path = a["path"] as? String, let out = a["out"] as? String else {
+            throw err("invalid arguments: path, out")
+        }
+        guard out.lowercased().hasSuffix(".png") else { throw err("out must end in .png") }
+        var iframes = try parseFrames(path: path)
+        iframes = mappedFrames(a, iframes)
+        var frameIndex = iframes.count - 1
+        switch (a["frame"] as? String) ?? "last" {
+        case "last": break
+        case "first": frameIndex = 0
+        case let f:
+            guard let i = Int(f), iframes.indices.contains(i) else {
+                throw err("frame must be 'first', 'last', or 0…\(iframes.count - 1)")
+            }
+            frameIndex = i
+        }
+        let ioptions = VideoExporter.Options(
+            width: a["width"] as? Int ?? 1280,
+            height: a["height"] as? Int ?? 960,
+            annotations: a["annotations"] as? Bool ?? true,
+            camera: parseCamera(a),
+            style: try parseStyle(a, frame: iframes[frameIndex]))
+        let dims = try VideoExporter.exportPNG(frames: iframes, frameIndex: frameIndex,
+                                               to: URL(fileURLWithPath: out), options: ioptions)
+        return "wrote \(out): frame \(frameIndex + 1)/\(iframes.count), \(dims.width)×\(dims.height)"
 
     case "export_frame":
         guard let path = a["path"] as? String, let out = a["out"] as? String else {

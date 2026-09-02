@@ -16,3 +16,18 @@ public struct Arv {
         self.charge = charge
     }
 }
+
+public extension Array where Element == [Arv] {
+    /// Map numeric type tokens to element symbols by position (1-based):
+    /// symbols ["O", "Al"] renames type "1" → O, "2" → Al. Non-numeric or
+    /// out-of-range tokens pass through unchanged.
+    func mappingElements(_ symbols: [String]) -> [[Arv]] {
+        guard !symbols.isEmpty else { return self }
+        return map { frame in
+            frame.map { a in
+                guard let t = Int(a.element), t >= 1, t <= symbols.count else { return a }
+                return Arv(element: symbols[t - 1], x: a.x, y: a.y, z: a.z, charge: a.charge)
+            }
+        }
+    }
+}

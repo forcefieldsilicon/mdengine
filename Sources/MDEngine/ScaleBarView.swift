@@ -1,12 +1,18 @@
 import SwiftUI
+import MDRender
 
 /// On-viewport scale bar (toggle: Inspector ▸ View ▸ Scale bar). Length snaps
 /// to a round Ångström value (1/2/5 × 10ⁿ) sized to stay 60–150 pt wide.
 /// Exact at the structure's center depth; in perspective, nearer/farther atoms
 /// deviate slightly (orthographic is depth-true everywhere).
 struct ScaleBarView: View {
-    @ObservedObject private var scale = ViewportScale.shared
+    @ObservedObject var scale: ViewportScale
     let viewportHeight: CGFloat
+
+    init(viewportHeight: CGFloat, scale: ViewportScale = .shared) {
+        self.viewportHeight = viewportHeight
+        self.scale = scale
+    }
 
     private var angstromsPerPoint: Double? {
         guard scale.distance > 0, scale.angstromsPerModelUnit > 0,
@@ -19,7 +25,7 @@ struct ScaleBarView: View {
 
     var body: some View {
         if let perPoint = angstromsPerPoint {
-            let nice = Self.niceLength(targetAngstroms: 100 * perPoint)
+            let nice = RenderCore.niceLength(targetAngstroms: 100 * perPoint)
             let width = CGFloat(nice / perPoint)
             VStack(alignment: .leading, spacing: 3) {
                 Text(nice >= 10_000 ? String(format: "%.1f µm", nice / 10_000)
@@ -38,14 +44,5 @@ struct ScaleBarView: View {
             .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
             .allowsHitTesting(false)
         }
-    }
-
-    /// Round 1/2/5×10ⁿ Å length nearest the target.
-    static func niceLength(targetAngstroms t: Double) -> Double {
-        guard t > 0, t.isFinite else { return 10 }
-        let exp = floor(log10(t))
-        let base = pow(10.0, exp)
-        let candidates = [base, 2 * base, 5 * base, 10 * base]
-        return candidates.min { abs($0 - t) < abs($1 - t) } ?? 10
     }
 }

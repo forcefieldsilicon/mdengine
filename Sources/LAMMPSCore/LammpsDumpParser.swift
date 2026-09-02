@@ -13,82 +13,169 @@ import Foundation
 
 public enum LammpsDumpParser {
     public static func parseFrames(_ text: String) -> [[Arv]] {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        var frames: [[Arv]] = []
-        var i = 0
+        // Byte-level parse: Substring-based parsing shares one atomic refcount
+        // across every token, which serializes multicore parsing (measured:
+        // parallel Substrings were SLOWER than sequential). Raw UTF-8 + strtod
+        // keeps the hot loop ARC-free and parallelizes cleanly.
+        var bytes = Array(text.utf8)
+        bytes.append(0)   // strtod safety: NUL-terminate the buffer
+        return bytes.withUnsafeBufferPointer { buf in
+            parseBytes(buf.baseAddress!, buf.count - 1)
+        }
+    }
 
-        while i < lines.count {
-            guard lines[i].hasPrefix("ITEM: TIMESTEP") else { i += 1; continue }
-            i += 2  // skip the timestep value line
+    /// Zero-copy-ish entry point: parse straight from file bytes — skips the
+    /// Data → String UTF-8 validation pass a 500 MB dump doesn't need.
+    public static func parseFrames(data: Data) -> [[Arv]] {
+        var bytes = [UInt8](data)
+        bytes.append(0)   // strtod safety
+        return bytes.withUnsafeBufferPointer { buf in
+            parseBytes(buf.baseAddress!, buf.count - 1)
+        }
+    }
 
-            guard i + 1 < lines.count, lines[i].hasPrefix("ITEM: NUMBER OF ATOMS"),
-                  let count = Int(lines[i + 1].trimmingCharacters(in: .whitespaces)),
-                  count > 0 else { break }
-            i += 2
+    private static let timestepPrefix = Array("ITEM: TIMESTEP".utf8)
 
-            guard i < lines.count, lines[i].hasPrefix("ITEM: BOX BOUNDS") else { break }
-            i += 1
-            var lo = [0.0, 0.0, 0.0], hi = [1.0, 1.0, 1.0]
-            for d in 0..<3 where i < lines.count {
-                let parts = lines[i].split(separator: " ")
-                if parts.count >= 2, let a = Double(parts[0]), let b = Double(parts[1]) {
-                    lo[d] = a; hi[d] = b
-                }
-                i += 1
+    private static func parseBytes(_ bytes: UnsafePointer<UInt8>, _ length: Int) -> [[Arv]] {
+        // Frame starts: one linear scan over line starts.
+        var starts: [Int] = []
+        var pos = 0
+        while pos < length {
+            if length - pos >= timestepPrefix.count,
+               memcmp(bytes + pos, timestepPrefix, timestepPrefix.count) == 0 {
+                starts.append(pos)
             }
+            guard let nl = memchr(bytes + pos, 0x0A, length - pos) else { break }
+            pos = UnsafeRawPointer(nl).assumingMemoryBound(to: UInt8.self) - bytes + 1
+        }
+        guard !starts.isEmpty else { return [] }
 
-            guard i < lines.count, lines[i].hasPrefix("ITEM: ATOMS") else { break }
-            let cols = lines[i].split(separator: " ").dropFirst(2).map(String.init)
-            i += 1
+        // Parse every frame on its own core; disjoint writes via the holder.
+        var results = [[Arv]?](repeating: nil, count: starts.count)
+        results.withUnsafeMutableBufferPointer { buffer in
+            let holder = FrameResultBuffer(buffer)
+            DispatchQueue.concurrentPerform(iterations: starts.count) { k in
+                let limit = k + 1 < starts.count ? starts[k + 1] : length
+                holder.buffer[k] = parseFrame(bytes, from: starts[k], limit: limit)
+            }
+        }
+        // A malformed or truncated frame (an in-flight dump's final block)
+        // parses to nil and is dropped; complete frames are unaffected.
+        return results.compactMap { $0 }
+    }
 
-            func col(_ names: [String]) -> Int? {
-                for n in names { if let k = cols.firstIndex(of: n) { return k } }
+    /// Sendable wrapper: concurrentPerform writes to disjoint indices only.
+    private final class FrameResultBuffer: @unchecked Sendable {
+        let buffer: UnsafeMutableBufferPointer<[Arv]?>
+        init(_ buffer: UnsafeMutableBufferPointer<[Arv]?>) { self.buffer = buffer }
+    }
+
+    /// Parse one ITEM: TIMESTEP block. nil = malformed/incomplete.
+    private static func parseFrame(_ bytes: UnsafePointer<UInt8>, from start: Int,
+                                   limit: Int) -> [Arv]? {
+        var pos = start
+
+        func nextLine() -> (s: Int, e: Int)? {
+            guard pos < limit else { return nil }
+            let s = pos
+            let remaining = limit - pos
+            if let nl = memchr(bytes + pos, 0x0A, remaining) {
+                let e = UnsafeRawPointer(nl).assumingMemoryBound(to: UInt8.self) - bytes
+                pos = e + 1
+                return (s, e)
+            }
+            pos = limit
+            return (s, limit)
+        }
+        func hasPrefix(_ line: (s: Int, e: Int), _ p: String) -> Bool {
+            let u = Array(p.utf8)
+            return line.e - line.s >= u.count && memcmp(bytes + line.s, u, u.count) == 0
+        }
+        func double(at offset: Int) -> Double {
+            strtod(UnsafeRawPointer(bytes + offset).assumingMemoryBound(to: CChar.self), nil)
+        }
+
+        guard let tsHeader = nextLine(), hasPrefix(tsHeader, "ITEM: TIMESTEP"),
+              nextLine() != nil,
+              let nHeader = nextLine(), hasPrefix(nHeader, "ITEM: NUMBER OF ATOMS"),
+              let nLine = nextLine() else { return nil }
+        let count = Int(double(at: nLine.s))
+        guard count > 0 else { return nil }
+
+        guard let boxHeader = nextLine(), hasPrefix(boxHeader, "ITEM: BOX BOUNDS") else { return nil }
+        var lo = [0.0, 0.0, 0.0], hi = [1.0, 1.0, 1.0]
+        for d in 0..<3 {
+            guard let line = nextLine() else { return nil }
+            var end: UnsafeMutablePointer<CChar>?
+            let a = strtod(UnsafeRawPointer(bytes + line.s).assumingMemoryBound(to: CChar.self), &end)
+            if let end { lo[d] = a; hi[d] = strtod(end, nil) }
+        }
+
+        guard let atomsHeader = nextLine(), hasPrefix(atomsHeader, "ITEM: ATOMS") else { return nil }
+        let headerText = String(decoding: UnsafeBufferPointer(
+            start: bytes + atomsHeader.s, count: atomsHeader.e - atomsHeader.s), as: UTF8.self)
+        let cols = headerText.split(separator: " ").dropFirst(2).map(String.init)
+
+        func col(_ names: [String]) -> Int? {
+            for n in names { if let k = cols.firstIndex(of: n) { return k } }
+            return nil
+        }
+        let xDirect = col(["x", "xu"]), xScaled = col(["xs", "xsu"])
+        let yDirect = col(["y", "yu"]), yScaled = col(["ys", "ysu"])
+        let zDirect = col(["z", "zu"]), zScaled = col(["zs", "zsu"])
+        let idCol = cols.firstIndex(of: "id")
+        let elementCol = cols.firstIndex(of: "element")
+        let typeCol = cols.firstIndex(of: "type")
+        let chargeCol = col(["q", "charge"])
+        guard (xDirect ?? xScaled) != nil, (yDirect ?? yScaled) != nil,
+              (zDirect ?? zScaled) != nil else { return nil }
+
+        var rows: [(id: Int, atom: Arv)] = []
+        rows.reserveCapacity(count)
+        var tokenStart = [Int](repeating: -1, count: cols.count)
+        var tokenEnd = [Int](repeating: -1, count: cols.count)
+
+        for _ in 0..<count {
+            guard let line = nextLine() else { return nil }   // truncated frame
+            // Tokenize the row: spaces/tabs separate up to cols.count fields.
+            var t = line.s
+            var field = 0
+            while t < line.e, field < cols.count {
+                while t < line.e, bytes[t] == 0x20 || bytes[t] == 0x09 { t += 1 }
+                guard t < line.e else { break }
+                tokenStart[field] = t
+                while t < line.e, bytes[t] != 0x20, bytes[t] != 0x09 { t += 1 }
+                tokenEnd[field] = t
+                field += 1
+            }
+            func value(_ k: Int?) -> Double? {
+                guard let k, k < field, tokenStart[k] >= 0 else { return nil }
+                return double(at: tokenStart[k])
+            }
+            func coord(direct: Int?, scaled: Int?, axis: Int) -> Double? {
+                if let v = value(direct) { return v }
+                if let s = value(scaled) { return lo[axis] + s * (hi[axis] - lo[axis]) }
                 return nil
             }
-            let xDirect = col(["x", "xu"]), xScaled = col(["xs", "xsu"])
-            let yDirect = col(["y", "yu"]), yScaled = col(["ys", "ysu"])
-            let zDirect = col(["z", "zu"]), zScaled = col(["zs", "zsu"])
-            let idCol = cols.firstIndex(of: "id")
-            let elementCol = cols.firstIndex(of: "element")
-            let typeCol = cols.firstIndex(of: "type")
-            let chargeCol = col(["q", "charge"])
-
-            guard (xDirect ?? xScaled) != nil, (yDirect ?? yScaled) != nil,
-                  (zDirect ?? zScaled) != nil, i + count <= lines.count else { break }
-
-            var rows: [(id: Int, atom: Arv)] = []
-            rows.reserveCapacity(count)
-            for r in i..<(i + count) {
-                let p = lines[r].split(separator: " ")
-                func value(_ k: Int?) -> Double? {
-                    guard let k, k < p.count else { return nil }
-                    return Double(p[k])
-                }
-                func coord(direct: Int?, scaled: Int?, axis: Int) -> Double? {
-                    if let v = value(direct) { return v }
-                    if let s = value(scaled) { return lo[axis] + s * (hi[axis] - lo[axis]) }
-                    return nil
-                }
-                guard let x = coord(direct: xDirect, scaled: xScaled, axis: 0),
-                      let y = coord(direct: yDirect, scaled: yScaled, axis: 1),
-                      let z = coord(direct: zDirect, scaled: zScaled, axis: 2),
-                      x.isFinite, y.isFinite, z.isFinite else { continue }  // drop corrupt/NaN rows
-                let element: String
-                if let e = elementCol, e < p.count {
-                    element = String(p[e])
-                } else if let t = typeCol, t < p.count {
-                    element = String(p[t])
-                } else {
-                    element = "?"
-                }
-                let id = value(idCol).map(Int.init) ?? rows.count
-                rows.append((id, Arv(element: element, x: x, y: y, z: z, charge: value(chargeCol))))
+            guard let x = coord(direct: xDirect, scaled: xScaled, axis: 0),
+                  let y = coord(direct: yDirect, scaled: yScaled, axis: 1),
+                  let z = coord(direct: zDirect, scaled: zScaled, axis: 2),
+                  x.isFinite, y.isFinite, z.isFinite else { continue }  // drop corrupt/NaN rows
+            let element: String
+            if let e = elementCol, e < field {
+                element = String(decoding: UnsafeBufferPointer(
+                    start: bytes + tokenStart[e], count: tokenEnd[e] - tokenStart[e]), as: UTF8.self)
+            } else if let tc = typeCol, tc < field {
+                element = String(decoding: UnsafeBufferPointer(
+                    start: bytes + tokenStart[tc], count: tokenEnd[tc] - tokenStart[tc]), as: UTF8.self)
+            } else {
+                element = "?"
             }
-            rows.sort { $0.id < $1.id }   // dumps are unordered; keep atom identity stable
-            frames.append(rows.map(\.atom))
-            i += count
+            let id = value(idCol).map(Int.init) ?? rows.count
+            rows.append((id, Arv(element: element, x: x, y: y, z: z, charge: value(chargeCol))))
         }
-        return frames
+        rows.sort { $0.id < $1.id }   // dumps are unordered; keep atom identity stable
+        return rows.map(\.atom)
     }
 }
 
@@ -100,6 +187,18 @@ public enum TrajectoryReader {
             return LammpsDumpParser.parseFrames(text)
         }
         return XYZParser.parseFrames(text)
+    }
+
+    /// Preferred for files: reads bytes once and — for native dumps — parses
+    /// them directly, skipping the String round-trip (validation + a copy).
+    /// XYZ falls back to text parsing (those files are typically small).
+    public static func parseFrames(contentsOf url: URL) throws -> [[Arv]] {
+        let data = try Data(contentsOf: url)
+        let head = String(decoding: data.prefix(2048), as: UTF8.self)
+        if head.contains("ITEM: TIMESTEP") {
+            return LammpsDumpParser.parseFrames(data: data)
+        }
+        return XYZParser.parseFrames(String(decoding: data, as: UTF8.self))
     }
 
     public static func isNativeDump(_ text: String) -> Bool {

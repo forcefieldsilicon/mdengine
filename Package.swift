@@ -12,6 +12,10 @@ let package = Package(
             name: "LAMMPSCore",
             targets: ["LAMMPSCore"]
         ),
+        .library(
+            name: "MDRender",
+            targets: ["MDRender"]
+        ),
         .executable(
             name: "MDEngine",
             targets: ["MDEngine"]
@@ -34,10 +38,15 @@ let package = Package(
             name: "LAMMPSCore",
             dependencies: []
         ),
+        .target(
+            name: "MDRender",
+            dependencies: ["LAMMPSCore"]
+        ),
         .executableTarget(
             name: "MDEngine",
             dependencies: [
                 "LAMMPSCore",
+                "MDRender",
                 .product(name: "SwiftPlot", package: "swiftplot"),
                 .product(name: "Numerics", package: "swift-numerics"),
             ],
@@ -51,7 +60,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "MDEngineMCP",
-            dependencies: ["LAMMPSCore"]
+            dependencies: ["LAMMPSCore", "MDRender"]
         ),
         .testTarget(
             name: "AppTests",

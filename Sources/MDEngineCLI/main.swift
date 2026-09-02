@@ -38,6 +38,18 @@ func fail(_ msg: String) -> Never {
     exit(1)
 }
 
+func readFrames(_ path: String) -> [[Arv]] {
+    if let bytes = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int,
+       bytes > 2_000_000_000 {
+        fail("\(path) is \(bytes / 1_000_000) MB — mdengine loads whole trajectories "
+           + "into memory (limit 2 GB). Decimate or split the file first.")
+    }
+    guard let frames = try? TrajectoryReader.parseFrames(contentsOf: URL(fileURLWithPath: path)) else {
+        fail("cannot read \(path)")
+    }
+    return frames
+}
+
 func readTrajectory(_ path: String) -> String {
     // Trajectories are loaded whole; refuse sizes that would thrash the machine.
     if let bytes = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int,
@@ -62,12 +74,7 @@ func takeFlag(_ flag: String, _ args: inout [String]) -> Bool {
 func applyElementMap(_ frames: [[Arv]], _ args: inout [String]) -> [[Arv]] {
     guard let spec = takeOption("--elements", &args) else { return frames }
     let symbols = spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-    return frames.map { frame in
-        frame.map { a in
-            guard let t = Int(a.element), t >= 1, t <= symbols.count else { return a }
-            return Arv(element: symbols[t - 1], x: a.x, y: a.y, z: a.z, charge: a.charge)
-        }
-    }
+    return frames.mappingElements(symbols)
 }
 
 /// Value of `--flag v` in args, removing both tokens.
@@ -135,13 +142,15 @@ switch command {
 case "info":
     guard let path = args.first else { fail("usage: mdengine info <file> [--elements A,B,..]") }
     args.removeFirst()
-    let text = readTrajectory(path)
-    var frames = TrajectoryReader.parseFrames(text)
+    var frames = readFrames(path)
     guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
     frames = applyElementMap(frames, &args)
     print("file:    \(path)")
     print("frames:  \(frames.count)")
-    if let fields = TrajectoryReader.dumpFields(text) {
+    // Only the head is needed for the fields line — not a whole-file String.
+    let head: String = (try? FileHandle(forReadingAtPath: path)
+        .map { String(decoding: $0.readData(ofLength: 65536), as: UTF8.self) }) ?? ""
+    if let fields = TrajectoryReader.dumpFields(head) {
         print("fields:  \(fields.joined(separator: " "))")
     }
     let counts = frames.map(\.count)
@@ -172,7 +181,7 @@ case "export":
     let out = takeOption("-o", &args) ?? "frame.xyz"
     let which = takeOption("--frame", &args) ?? "last"
     let charges = takeFlag("--charges", &args)
-    var frames = TrajectoryReader.parseFrames(readTrajectory(path))
+    var frames = readFrames(path)
     guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
     frames = applyElementMap(frames, &args)
     let frame: [Arv]
@@ -200,7 +209,7 @@ case "decimate":
     let out = takeOption("-o", &args)
         ?? (path as NSString).deletingPathExtension + ".every\(every).xyz"
     let charges = takeFlag("--charges", &args)
-    let frames = TrajectoryReader.parseFrames(readTrajectory(path))
+    let frames = readFrames(path)
     guard !frames.isEmpty else { fail("no complete frames found in \(path)") }
     var kept = stride(from: 0, to: frames.count, by: every).map { frames[$0] }
     if (frames.count - 1) % every != 0 { kept.append(frames.last!) }  // always keep final state
