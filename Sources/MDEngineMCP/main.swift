@@ -654,7 +654,7 @@ while let line = readLine(strippingNewline: true) {
         let version = params?["protocolVersion"] as? String ?? "2025-06-18"
         reply(id, ["protocolVersion": version,
                    "capabilities": ["tools": [String: Any]()],
-                   "serverInfo": ["name": "mdengine", "version": "0.5.0"]])
+                   "serverInfo": ["name": "mdengine", "version": "0.6.0"]])
     case "ping":
         reply(id, [:])
     case "tools/list":
