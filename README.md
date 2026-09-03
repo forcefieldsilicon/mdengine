@@ -67,12 +67,45 @@ or in Claude Desktop's `claude_desktop_config.json`:
 | `submit_lammps` | Detached LAMMPS job: survives the server exiting and machine display-sleep (`caffeinate`), exit code recorded unattended |
 | `job_status` / `job_log` | State + live thermo tail / raw log tail |
 | `job_files` | Locate a finished job's outputs (run dir + bookkeeping dir) |
-| `list_jobs` / `cancel_job` | Registry under `~/.mdengine/jobs/` / SIGTERM a run |
+| `list_jobs` / `cancel_job` | Registry under `~/.mdengine/jobs/` / SIGTERM a run (state becomes `cancelled`) |
+| `list_hosts` | Execution hosts from `~/.mdengine/hosts.json` and which is the default |
+| `fetch_job` | Pull a remote job's run directory (dumps, data) + logs into the local job dir under `results/` |
 | `run_lammps` | Synchronous run for short tests only |
 
 Jobs run in the deck's own directory (relative `read_data` paths work) and
 launch with `-sf omp -pk omp N` so the OPENMP package is actually engaged;
 `$LAMMPS_POTENTIALS` is derived from the LAMMPS install when unset.
+
+## Remote hosts (run on your own Linux / GPU box)
+
+The job runner can execute on another machine with the **same tool contract**:
+declare hosts in `~/.mdengine/hosts.json` and pass `host` to `submit_lammps`
+(or set a `default`). The deck's directory is rsynced up (trajectories,
+checkpoints and logs excluded), LAMMPS starts under `nohup` with its exit code
+recorded remotely, and `job_status` / `job_log` / `job_files` / `cancel_job`
+work unchanged; `fetch_job` brings results back for `trajectory_info`,
+`z_profile` and the renderers.
+
+```json
+{
+  "default": "gpu1",
+  "hosts": {
+    "gpu1": {
+      "ssh": "me@gpu1.example.net",
+      "workdir": "~/mdengine-jobs",
+      "lmp": "/usr/local/bin/lmp",
+      "threads": 8,
+      "launch": "{lmp} -in {input} -k on g 1 -sf kk -pk kokkos newton on neigh half -log {log}"
+    }
+  }
+}
+```
+
+`ssh` is anything `ssh` accepts (key-based, non-interactive); `lmp` must be an
+absolute path (login PATH is not available over ssh); `launch` is optional —
+the default is the OpenMP form, and a GPU host is simply one whose template
+carries the KOKKOS flags. A remote deck must be self-contained within its own
+directory. The same trust model as local runs applies, on the remote machine.
 
 ## Platform & limits
 
