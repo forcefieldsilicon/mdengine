@@ -2,6 +2,7 @@ import Foundation
 import MDRender
 import AppKit
 import LAMMPSCore
+import UniformTypeIdentifiers
 
 final class ContentViewModel: ObservableObject {
     @Published var frames: [[Arv]] = []
@@ -163,6 +164,37 @@ final class ContentViewModel: ObservableObject {
                     Self.alert("Video export failed", info: error.localizedDescription)
                 }
             }
+        }
+    }
+
+    // MARK: - Z-profile export (CSV / Excel, always the trajectory's LAST frame)
+
+    enum ZProfileExportFormat { case csv, xlsx }
+
+    func exportZProfile(substrate: String, probe: String, format: ZProfileExportFormat) {
+        guard let last = frames.last,
+              let zp = ZProfileAnalysis(frame: last, substrate: substrate, probe: probe)
+        else { return }
+        let ext = format == .csv ? "csv" : "xlsx"
+        let panel = NSSavePanel()
+        if let type = UTType(filenameExtension: ext) { panel.allowedContentTypes = [type] }
+        let base = sourceName.isEmpty ? "trajectory"
+            : (sourceName as NSString).deletingPathExtension
+        panel.nameFieldStringValue = "\(base)-zprofile.\(ext)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            switch format {
+            case .csv:
+                try ZProfileExport.csv(analysis: zp, frame: last,
+                                       frameIndex: frames.count - 1, source: sourceName)
+                    .write(to: url, atomically: true, encoding: .utf8)
+            case .xlsx:
+                try ZProfileExport.writeXLSX(to: url, analysis: zp, frame: last,
+                                             frameIndex: frames.count - 1, source: sourceName)
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            Self.alert("Z-profile export failed", info: error.localizedDescription)
         }
     }
 

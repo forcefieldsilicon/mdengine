@@ -301,16 +301,37 @@ struct InspectorView: View {
                     }
                 }
                 zHistogram(zp)
+                // Same button-row layout as Video export below, so the two
+                // export rows align. Always exports the trajectory's LAST frame.
+                HStack {
+                    Button("Export CSV…") {
+                        model.exportZProfile(substrate: zSubstrate, probe: zProbe, format: .csv)
+                    }
+                    Button("Export Excel…") {
+                        model.exportZProfile(substrate: zSubstrate, probe: zProbe, format: .xlsx)
+                    }
+                    .help("Two sheets: profile summary + histogram, and one row per probe atom")
+                }
+                .disabled(model.frames.isEmpty)
+                if !model.frames.isEmpty && model.frameIndex != model.frames.count - 1 {
+                    Text("Exports use the last frame (\(model.frames.count - 1))")
+                        .font(.system(size: 9)).foregroundColor(.secondary)
+                }
             } else if zSubstrate == zProbe {
                 Text("Pick two different elements").foregroundColor(.secondary)
             }
         }
     }
 
-    /// Mini histogram of probe z relative to the surface plane (▼ left of the
-    /// dashed line = penetrated; right = above the surface).
+    /// Mini histogram of probe z relative to the surface plane: orange bars
+    /// left of the dashed surface line = penetrated, blue right = above; the
+    /// axis below is depth/height in Å relative to the plane.
     private func zHistogram(_ zp: ZProfileAnalysis) -> some View {
         let maxCount = max(1, zp.histogram.map(\.count).max() ?? 1)
+        let lo = zp.histogram.first?.range.lowerBound ?? 0
+        let hi = zp.histogram.last?.range.upperBound ?? 1
+        let span = max(0.001, hi - lo)
+        let surfaceFrac = min(1, max(0, (0 - lo) / span))
         return VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(zp.histogram.indices, id: \.self) { i in
@@ -325,8 +346,39 @@ struct InspectorView: View {
                 }
             }
             .frame(height: 38, alignment: .bottom)
+            .padding(.top, 12)   // room for the "surface" label above the bars
+            .overlay(alignment: .bottomLeading) {   // dashed line + label at the surface plane (0 Å)
+                GeometryReader { geo in
+                    let x = geo.size.width * CGFloat(surfaceFrac)
+                    Path { p in
+                        p.move(to: CGPoint(x: x, y: 12))
+                        p.addLine(to: CGPoint(x: x, y: geo.size.height))
+                    }
+                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                    .foregroundColor(.secondary)
+                    Text("surface 0 Å")
+                        .font(.system(size: 8)).foregroundColor(.secondary)
+                        .fixedSize()
+                        .position(x: min(max(x, 28), geo.size.width - 28), y: 5)
+                }
+            }
+            .help("\(zp.probeElement) atoms per depth bin, measured from the \(zp.substrateElement) surface plane. "
+                  + "Dashed line = the surface (0 Å). Orange bars = atoms that penetrated below it; "
+                  + "blue bars = atoms at or above it (chemisorbed or in flight).")
+            // Depth axis: numeric labels in Å relative to the surface plane
+            // (negative = penetrated), evenly spaced to match the bin span.
+            HStack {
+                ForEach(0..<5) { i in
+                    if i > 0 { Spacer() }
+                    Text(String(format: "%.1f", lo + span * Double(i) / 4))
+                        .font(.system(size: 8)).monospacedDigit()
+                        .foregroundColor(.secondary)
+                }
+            }
             HStack {
                 Text("◀ deeper").font(.system(size: 9)).foregroundColor(.orange)
+                Spacer()
+                Text("Å rel. surface").font(.system(size: 9)).foregroundColor(.secondary)
                 Spacer()
                 Text("above surface ▶").font(.system(size: 9)).foregroundColor(.secondary)
             }
