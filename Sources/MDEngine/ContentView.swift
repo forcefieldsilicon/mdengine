@@ -49,6 +49,18 @@ struct ContentView: View {
             summaryBar
         }
         .navigationTitle(model.sourceName.isEmpty ? "MDEngine" : model.sourceName)
+        .toolbar {
+            // Top-right, Xcode-style: full-size toolbar button with the system
+            // rounded background, instead of a small icon buried in the status bar.
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.showInspector.toggle()
+                } label: {
+                    Label("Inspector", systemImage: "sidebar.trailing")
+                }
+                .help("Hide or show the Inspector (⌥⌘I)")
+            }
+        }
         .inspector(isPresented: $model.showInspector) {
             InspectorView(model: model)
                 .inspectorColumnWidth(min: 320, ideal: 340, max: 460)
@@ -188,13 +200,6 @@ struct ContentView: View {
                  : "\(model.sourceName) · Orbit: drag · Pan: double-click- or two-finger-drag · Zoom: scroll")
                 .foregroundColor(.secondary)
                 .lineLimit(1)
-            Button {
-                model.showInspector.toggle()
-            } label: {
-                Image(systemName: "sidebar.trailing")
-            }
-            .buttonStyle(.borderless)
-            .help("Show or hide the inspector (⌥⌘I)")
         }
         .font(.callout)
         .padding(.horizontal, 12)

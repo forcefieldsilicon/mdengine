@@ -6,7 +6,7 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
 (Gitinama Inc.).
 
 ## Commands
-- Build: `swift build` · Tests: `swift test` (11 cases, keep green)
+- Build: `swift build` · Tests: `swift test` (16 cases, keep green)
 - Release: `swift build -c release` — **ALWAYS run after changes**:
   `/opt/homebrew/bin/mdengine` and `mdengine-mcp` are symlinks into
   `.build/release/`; a debug-only build leaves every other session running
@@ -15,6 +15,10 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
   (ad-hoc unless `DEVELOPER_ID`/`NOTARY_PROFILE` set). DMG: `./scripts/make_dmg.sh`.
 - MCP protocol smoke: pipe JSON-RPC lines into `.build/release/mdengine-mcp`
   (initialize → tools/list → tools/call).
+- Remote execution (`Sources/MDEngineMCP/RemoteJobs.swift`): hosts in
+  `~/.mdengine/hosts.json`; test bed = `localhost-test` host over ssh to this Mac
+  (own key in ~/.ssh/authorized_keys). `lmp` must be an absolute path — no login
+  PATH over ssh. Release packaging: `make_tools.sh` (CLI+MCP tarball).
 
 ## Gotchas that already bit
 - SPM does NOT prune deleted resources from an existing

@@ -120,13 +120,21 @@ enum Jobs {
         return obj
     }
 
+    /// The remote host a job runs on, when job.json carries one.
+    static func remoteHost(_ id: String) -> RemoteHost? {
+        guard let name = meta(id)?["host"] as? String else { return nil }
+        return try? RemoteHosts.resolve(name)
+    }
+
     /// running | done(exit N) | vanished (no exitcode, pid gone — e.g. reboot)
     static func state(_ id: String) -> String {
+        if let h = remoteHost(id) { return RemoteJobs.state(id, host: h) }
         let exitFile = dir(id).appendingPathComponent("exitcode")
         if let s = try? String(contentsOf: exitFile, encoding: .utf8) {
             let code = s.trimmingCharacters(in: .whitespacesAndNewlines)
             return code == "0" ? "done (exit 0)" : "FAILED (exit \(code))"
         }
+        if FileManager.default.fileExists(atPath: dir(id).appendingPathComponent("cancelled").path) { return "cancelled" }
         if let pid = meta(id)?["pid"] as? Int32, kill(pid, 0) == 0 { return "running" }
         return "vanished (no exit code, process gone)"
     }
@@ -135,7 +143,12 @@ enum Jobs {
     /// and the wall-time summary when present.
     static func progress(_ id: String, lines: Int = 6) -> String {
         let log = dir(id).appendingPathComponent("log.lammps")
-        guard let text = try? String(contentsOf: log, encoding: .utf8) else {
+        let text: String
+        if let h = remoteHost(id) {
+            text = RemoteJobs.logTail(id, host: h, lines: 60)
+        } else if let local = try? String(contentsOf: log, encoding: .utf8) {
+            text = local
+        } else {
             return "(no log yet)"
         }
         let all = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
@@ -194,6 +207,7 @@ enum Jobs {
     }
 
     static func cancel(_ id: String) throws -> String {
+        if let h = remoteHost(id) { return RemoteJobs.cancel(id, host: h) }
         guard let pid = meta(id)?["pid"] as? Int32 else { throw err("unknown job \(id)") }
         guard kill(pid, 0) == 0 else { return "\(id): process already gone" }
         // Terminate the lmp/caffeinate children first, then the sh wrapper.
@@ -203,6 +217,7 @@ enum Jobs {
         try? pkill.run()
         pkill.waitUntilExit()
         kill(pid, SIGTERM)
+        try? ISO8601DateFormatter().string(from: Date()).write(to: dir(id).appendingPathComponent("cancelled"), atomically: true, encoding: .utf8)
         return "\(id): sent SIGTERM"
     }
 
@@ -287,12 +302,22 @@ let toolDefs: [[String: Any]] = [
                                     "out": ["type": "string", "description": "Output file path"]],
                      "required": ["path", "every", "out"]]],
     ["name": "submit_lammps",
-     "description": "Submit a LAMMPS input script as a DETACHED background job: keeps the machine awake (caffeinate), survives this server exiting, records its exit code. Runs in the input's own directory so relative data/potential paths work. Returns a job id — poll with job_status.",
+     "description": "Submit a LAMMPS input script as a DETACHED background job — locally (keeps the machine awake, survives this server exiting, records its exit code) or on a configured REMOTE host (~/.mdengine/hosts.json: the deck's directory is rsynced up, minus trajectories/checkpoints/logs, and LAMMPS runs there under nohup with its exit code recorded remotely; a GPU box is just a host whose launch template carries the KOKKOS flags). Runs in the input's own directory so relative data/potential paths work; a remote deck must be self-contained within that directory. Returns a job id — poll with job_status; for remote jobs, fetch_job pulls results back.",
      "inputSchema": ["type": "object",
                      "properties": ["input": ["type": "string", "description": "Path to the LAMMPS input script"],
-                                    "threads": ["type": "integer", "description": "OpenMP threads (default: performance-core count)"],
-                                    "label": ["type": "string", "description": "Short slug for the job id"]],
+                                    "threads": ["type": "integer", "description": "OpenMP threads (default: performance-core count locally, or the host's configured threads)"],
+                                    "label": ["type": "string", "description": "Short slug for the job id"],
+                                    "host": ["type": "string", "description": "Remote host name from hosts.json; 'local' forces this machine; omitted = hosts.json default, else local"]],
                      "required": ["input"]]],
+    ["name": "list_hosts",
+     "description": "List the execution hosts configured in ~/.mdengine/hosts.json (ssh target, remote LAMMPS, workdir, launch template) and which is the default.",
+     "inputSchema": ["type": "object", "properties": [String: Any]()]],
+    ["name": "fetch_job",
+     "description": "Pull a REMOTE job's outputs (its run directory: dumps, data files, plus log.lammps/stdout.log) back into the local job dir under results/, so trajectory_info / z_profile / render_* can read them. Safe to call while the job is still running (partial dumps parse to complete frames).",
+     "inputSchema": ["type": "object",
+                     "properties": ["job_id": ["type": "string"],
+                                    "include_trajectories": ["type": "boolean", "description": "Also pull *.traj/*.lammpstrj/*.dump (default true — that is usually the point)"]],
+                     "required": ["job_id"]]],
     ["name": "job_status",
      "description": "State of a submitted job (running / done / FAILED / vanished) plus the latest thermo lines from its LAMMPS log.",
      "inputSchema": ["type": "object",
@@ -559,17 +584,34 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
 
     case "submit_lammps":
         guard let input = a["input"] as? String else { throw err("invalid arguments: input") }
+        if let host = try RemoteHosts.resolve(a["host"] as? String) {
+            let id = try RemoteJobs.submit(host: host, input: input, threads: a["threads"] as? Int,
+                                           label: a["label"] as? String)
+            return "submitted \(id) on \(host.name) (\(host.ssh))\nremote dir: \(host.workdir)/\(id)\nlocal job dir: \(Jobs.dir(id).path)\npoll with job_status; fetch_job pulls results back"
+        }
         let threads = a["threads"] as? Int ?? performanceCores()
         let id = try Jobs.submit(input: input, threads: threads, label: a["label"] as? String)
         return "submitted \(id)\njob dir: \(Jobs.dir(id).path)\npoll with job_status"
+
+    case "list_hosts":
+        return RemoteHosts.describe()
+
+    case "fetch_job":
+        guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
+        guard Jobs.meta(id) != nil else { throw err("unknown job \(id)") }
+        guard let host = Jobs.remoteHost(id) else { return "\(id) ran locally — its files are already in place (see job_files)" }
+        let withTraj = a["include_trajectories"] as? Bool ?? true
+        let excludes = withTraj ? [".git"] : RemoteHost.defaultExcludes
+        return try RemoteJobs.fetch(id, host: host, excludes: excludes)
 
     case "job_status":
         guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
         guard let meta = Jobs.meta(id) else { throw err("unknown job \(id)") }
         let elapsed = (meta["started"] as? Double)
             .map { String(format: "%.0f s", Date().timeIntervalSince1970 - $0) } ?? "?"
+        let where_ = (meta["host"] as? String).map { " · host \($0)" } ?? ""
         return """
-        \(id): \(Jobs.state(id))  (elapsed \(elapsed), \(meta["threads"] ?? "?") omp threads)
+        \(id): \(Jobs.state(id))  (elapsed \(elapsed), \(meta["threads"] ?? "?") threads\(where_))
         input: \(meta["input"] ?? "?")
         \(Jobs.progress(id))
         """
@@ -577,6 +619,7 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
     case "job_log":
         guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
         let n = a["lines"] as? Int ?? 40
+        if let h = Jobs.remoteHost(id) { return RemoteJobs.logTail(id, host: h, lines: n) }
         let log = Jobs.dir(id).appendingPathComponent("log.lammps")
         let alt = Jobs.dir(id).appendingPathComponent("stdout.log")
         guard let text = (try? String(contentsOf: log, encoding: .utf8))
@@ -601,6 +644,11 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
                 return "  \(name)  \(size) bytes"
             }
             return "\(label): \(dir)\n" + rows.joined(separator: "\n")
+        }
+        if let h = Jobs.remoteHost(id) {
+            return RemoteJobs.files(id, host: h) + "\n"
+                 + listing(Jobs.dir(id).path, label: "local job bookkeeping")
+                 + "\n(use fetch_job to pull the remote run directory here)"
         }
         let cwd = meta["cwd"] as? String ?? "?"
         return listing(cwd, label: "run directory") + "\n"
@@ -657,7 +705,7 @@ while let line = readLine(strippingNewline: true) {
         let version = params?["protocolVersion"] as? String ?? "2025-06-18"
         reply(id, ["protocolVersion": version,
                    "capabilities": ["tools": [String: Any]()],
-                   "serverInfo": ["name": "mdengine", "version": "0.6.0"]])
+                   "serverInfo": ["name": "mdengine", "version": "0.6.1"]])
     case "ping":
         reply(id, [:])
     case "tools/list":

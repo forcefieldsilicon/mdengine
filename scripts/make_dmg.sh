@@ -16,4 +16,14 @@ ln -s /Applications "$STAGE/Applications"
 DMG="dist/MDEngine-$VERSION.dmg"
 rm -f "$DMG"
 hdiutil create -volname "MDEngine $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+
+# Release: sign the disk image too, and notarize + staple it so Gatekeeper is
+# satisfied at the DMG level, not only for the stapled app inside.
+if [ -n "${DEVELOPER_ID:-}" ]; then
+  codesign --force --timestamp -s "$DEVELOPER_ID" "$DMG"
+  if [ -n "${NOTARY_PROFILE:-}" ]; then
+    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$DMG"
+  fi
+fi
 echo "packaged: $DMG"
