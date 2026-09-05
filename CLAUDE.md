@@ -6,7 +6,7 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
 (Gitinama Inc.).
 
 ## Commands
-- Build: `swift build` · Tests: `swift test` (16 cases, keep green)
+- Build: `swift build` · Tests: `swift test` (20 cases, keep green)
 - Release: `swift build -c release` — **ALWAYS run after changes**:
   `/opt/homebrew/bin/mdengine` and `mdengine-mcp` are symlinks into
   `.build/release/`; a debug-only build leaves every other session running
@@ -19,6 +19,10 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
   `~/.mdengine/hosts.json`; test bed = `localhost-test` host over ssh to this Mac
   (own key in ~/.ssh/authorized_keys). `lmp` must be an absolute path — no login
   PATH over ssh. Release packaging: `make_tools.sh` (CLI+MCP tarball).
+- Hosted GPU tier (`Sources/LAMMPSCore/HostedClient.swift`, `hosted/CONTRACT.md`): dev
+  loop = `python3 hosted/mock/mock_endpoint.py --port 8788 --data <dir>` +
+  `MDENGINE_HOSTED_URL=http://127.0.0.1:8788/v1 MDENGINE_HOSTED_LAUNCH="{lmp} -in {input} -log log.lammps"`,
+  pod stand-in = `docker/runner-gpu/runner.sh` with `MDE_WORK`/`LMP` (see hosted/README.md).
 
 ## Gotchas that already bit
 - SPM does NOT prune deleted resources from an existing

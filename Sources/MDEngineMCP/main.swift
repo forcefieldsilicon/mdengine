@@ -302,12 +302,14 @@ let toolDefs: [[String: Any]] = [
                                     "out": ["type": "string", "description": "Output file path"]],
                      "required": ["path", "every", "out"]]],
     ["name": "submit_lammps",
-     "description": "Submit a LAMMPS input script as a DETACHED background job — locally (keeps the machine awake, survives this server exiting, records its exit code) or on a configured REMOTE host (~/.mdengine/hosts.json: the deck's directory is rsynced up, minus trajectories/checkpoints/logs, and LAMMPS runs there under nohup with its exit code recorded remotely; a GPU box is just a host whose launch template carries the KOKKOS flags). Runs in the input's own directory so relative data/potential paths work; a remote deck must be self-contained within that directory. Returns a job id — poll with job_status; for remote jobs, fetch_job pulls results back.",
+     "description": "Submit a LAMMPS input script as a DETACHED background job — locally (keeps the machine awake, survives this server exiting, records its exit code) or on a configured REMOTE host (~/.mdengine/hosts.json: the deck's directory is rsynced up, minus trajectories/checkpoints/logs, and LAMMPS runs there under nohup with its exit code recorded remotely; a GPU box is just a host whose launch template carries the KOKKOS flags). host='cloud' sends the deck to the hosted GPU tier (RTX 4090, KOKKOS; prepaid credits at $2/GPU-h, API key from `mdengine login`) — same job tools, results come back with fetch_job. Runs in the input's own directory so relative data/potential paths work; a remote deck must be self-contained within that directory. Returns a job id — poll with job_status; for remote jobs, fetch_job pulls results back.",
      "inputSchema": ["type": "object",
                      "properties": ["input": ["type": "string", "description": "Path to the LAMMPS input script"],
                                     "threads": ["type": "integer", "description": "OpenMP threads (default: performance-core count locally, or the host's configured threads)"],
                                     "label": ["type": "string", "description": "Short slug for the job id"],
-                                    "host": ["type": "string", "description": "Remote host name from hosts.json; 'local' forces this machine; omitted = hosts.json default, else local"]],
+                                    "host": ["type": "string", "description": "Remote host name from hosts.json; 'cloud' = the hosted GPU tier (prepaid credits, API key via `mdengine login`); 'local' forces this machine; omitted = hosts.json default, else local"],
+                                    "gpu": ["type": "string", "description": "host=cloud only: any (cheapest) | rtx4090 | a100"],
+                                    "wall_hours": ["type": "number", "description": "host=cloud only: hard wall-clock cap in hours (default 4; billed to the cap if hit)"]],
                      "required": ["input"]]],
     ["name": "list_hosts",
      "description": "List the execution hosts configured in ~/.mdengine/hosts.json (ssh target, remote LAMMPS, workdir, launch template) and which is the default.",
@@ -584,6 +586,13 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
 
     case "submit_lammps":
         guard let input = a["input"] as? String else { throw err("invalid arguments: input") }
+        if (a["host"] as? String) == "cloud" {
+            let client = try HostedClient.fromSavedCredentials()
+            let spec = HostedJobSpec(input: input, label: a["label"] as? String, gpu: a["gpu"] as? String ?? "any",
+                                     wallLimitS: Int(((a["wall_hours"] as? Double) ?? 4) * 3600))
+            let id = try client.submit(input: input, spec: spec)
+            return "submitted \(id) to the hosted GPU tier (\(client.base.host ?? "endpoint"), gpu \(spec.gpu), wall limit \(spec.wall_limit_s / 3600) h)\nlocal job dir: \(Jobs.dir(id).path)\npoll with job_status (live thermo tail); fetch_job downloads results when done"
+        }
         if let host = try RemoteHosts.resolve(a["host"] as? String) {
             let id = try RemoteJobs.submit(host: host, input: input, threads: a["threads"] as? Int,
                                            label: a["label"] as? String)
@@ -594,11 +603,23 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
         return "submitted \(id)\njob dir: \(Jobs.dir(id).path)\npoll with job_status"
 
     case "list_hosts":
-        return RemoteHosts.describe()
+        var cloud = "cloud: hosted GPU tier — "
+        if let c = try? HostedClient.fromSavedCredentials(), let me = try? c.me() {
+            cloud += "\(c.base.host ?? c.base.absoluteString), balance $\(String(format: "%.2f", me.balance_usd)), rates \(me.rate_table.sorted { $0.key < $1.key }.map { "\($0.key) $\($0.value)/h" }.joined(separator: ", "))"
+        } else {
+            cloud += "no API key (mdengine login <mde_key>; keys come with a credit pack at forcefieldsilicon.com/mdengine)"
+        }
+        return RemoteHosts.describe() + "\n" + cloud
 
     case "fetch_job":
         guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
         guard Jobs.meta(id) != nil else { throw err("unknown job \(id)") }
+        if HostedClient.cloudMeta(id) != nil {
+            let dir = try HostedClient.fromSavedCredentials().fetch(id)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.sorted() ?? []
+            let traj = HostedClient.primaryTrajectory(in: dir).map { "\ntrajectory: \($0.path)" } ?? ""
+            return "fetched \(names.count) files → \(dir.path)\n" + names.prefix(50).map { "  " + $0 }.joined(separator: "\n") + traj
+        }
         guard let host = Jobs.remoteHost(id) else { return "\(id) ran locally — its files are already in place (see job_files)" }
         let withTraj = a["include_trajectories"] as? Bool ?? true
         let excludes = withTraj ? [".git"] : RemoteHost.defaultExcludes
@@ -607,6 +628,12 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
     case "job_status":
         guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
         guard let meta = Jobs.meta(id) else { throw err("unknown job \(id)") }
+        if HostedClient.cloudMeta(id) != nil {
+            let s = try HostedClient.fromSavedCredentials().status(id)
+            let tail = (s.thermo_tail ?? []).suffix(8).joined(separator: "\n")
+            return "\(s.summary)  · hosted GPU tier\ninput: \(meta["input"] ?? "?")\n" + (tail.isEmpty ? "(no thermo yet)" : tail)
+                 + (s.isTerminal ? "\nfetch_job downloads results" : "")
+        }
         let elapsed = (meta["started"] as? Double)
             .map { String(format: "%.0f s", Date().timeIntervalSince1970 - $0) } ?? "?"
         let where_ = (meta["host"] as? String).map { " · host \($0)" } ?? ""
@@ -619,6 +646,14 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
     case "job_log":
         guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
         let n = a["lines"] as? Int ?? 40
+        if HostedClient.cloudMeta(id) != nil {
+            let local = Jobs.dir(id).appendingPathComponent("log.lammps")
+            if let text = try? String(contentsOf: local, encoding: .utf8) {   // fetched already
+                return text.split(separator: "\n").suffix(n).joined(separator: "\n")
+            }
+            let s = try HostedClient.fromSavedCredentials().status(id)
+            return (s.thermo_tail ?? ["(no thermo yet)"]).joined(separator: "\n") + "\n(live tail from the endpoint; the full log arrives with fetch_job)"
+        }
         if let h = Jobs.remoteHost(id) { return RemoteJobs.logTail(id, host: h, lines: n) }
         let log = Jobs.dir(id).appendingPathComponent("log.lammps")
         let alt = Jobs.dir(id).appendingPathComponent("stdout.log")
@@ -645,6 +680,11 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
             }
             return "\(label): \(dir)\n" + rows.joined(separator: "\n")
         }
+        if HostedClient.cloudMeta(id) != nil {
+            let res = Jobs.dir(id).appendingPathComponent("results").path
+            return listing(res, label: "fetched results") + "\n" + listing(Jobs.dir(id).path, label: "job bookkeeping")
+                 + (FileManager.default.fileExists(atPath: res) ? "" : "\n(hosted job — fetch_job downloads results when done)")
+        }
         if let h = Jobs.remoteHost(id) {
             return RemoteJobs.files(id, host: h) + "\n"
                  + listing(Jobs.dir(id).path, label: "local job bookkeeping")
@@ -656,6 +696,7 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
 
     case "cancel_job":
         guard let id = a["job_id"] as? String else { throw err("invalid arguments: job_id") }
+        if HostedClient.cloudMeta(id) != nil { return try HostedClient.fromSavedCredentials().cancel(id).summary }
         return try Jobs.cancel(id)
 
     case "run_lammps":

@@ -20,6 +20,16 @@ USAGE
                                            keep every Nth frame (last always kept)
   mdengine run <input> [--threads N] [--lmp PATH] [--log FILE]
                                            run LAMMPS with -sf omp -pk omp N
+  mdengine run --gpu <input> [--label S] [--gpu-type any|rtx4090|a100]
+                             [--wall-hours H] [--estimate-min M] [--no-wait]
+                                           run on a hosted GPU (prepaid credits):
+                                           ships the deck's directory, streams
+                                           thermo, downloads results when done
+  mdengine login <mde_key> [--endpoint URL]  store the API key (~/.mdengine/credentials)
+  mdengine account                         credit balance + rate table
+  mdengine jobs                            hosted jobs, newest first
+  mdengine job <id> [--log|--fetch|--cancel|--wait]
+                                           status / thermo tail / download / cancel
   mdengine gui                             open MDEngine.app
 
 NOTES
@@ -31,6 +41,9 @@ NOTES
   Every subcommand accepts -h/--help.
   `run` finds LAMMPS via $MDENGINE_LMP, then lmp_mpi / lmp_serial / lmp on PATH.
   Default --threads = number of performance cores.
+  --gpu needs an API key (comes with a credit pack: forcefieldsilicon.com/mdengine);
+  $MDENGINE_API_KEY / $MDENGINE_HOSTED_URL override the stored credentials.
+  A hosted deck must be self-contained in its directory (data, potentials, molecule files).
 """
 
 func fail(_ msg: String) -> Never {
@@ -125,6 +138,28 @@ func potentialsDir(for lmp: String) -> String? {
         "/usr/local/share/lammps/potentials",
     ]
     return candidates.first { FileManager.default.fileExists(atPath: $0) }
+}
+
+func shellQuoteCLI(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
+/// Stream state changes + new thermo lines until terminal, then download results. Returns the exit code to use.
+func hostedWaitAndFetch(_ client: HostedClient, _ id: String) -> Int32 {
+    do {
+        let final = try client.wait(id, every: 5) { s, fresh in
+            for line in fresh { print("  " + line) }
+            fflush(stdout)
+            if fresh.isEmpty, !s.isTerminal { print("mdengine: \(s.summary)") }
+        }
+        print("mdengine: \(final.summary)")
+        guard final.state == "done" || final.state == "failed" else { return 1 }
+        let dir = try client.fetch(id)
+        print("results → \(dir.path)")
+        if let t = HostedClient.primaryTrajectory(in: dir) { print("trajectory: \(t.path)") }
+        return final.state == "done" ? 0 : Int32(final.exitcode ?? 1)
+    } catch {
+        FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+        return 1
+    }
 }
 
 var args = Array(CommandLine.arguments.dropFirst())
@@ -223,6 +258,27 @@ case "decimate":
     } catch { fail("write failed: \(error.localizedDescription)") }
 
 case "run":
+    if takeFlag("--gpu", &args) {
+        guard let input = args.first else { fail("usage: mdengine run --gpu <input> [--label S] [--gpu-type T] [--wall-hours H] [--no-wait]") }
+        args.removeFirst()
+        let label = takeOption("--label", &args)
+        let gpu = takeOption("--gpu-type", &args) ?? "any"
+        let wallH = Double(takeOption("--wall-hours", &args) ?? "") ?? 4
+        let estMin = Double(takeOption("--estimate-min", &args) ?? "") ?? 60
+        let noWait = takeFlag("--no-wait", &args)
+        let client: HostedClient
+        do { client = try HostedClient.fromSavedCredentials() } catch { fail(error.localizedDescription) }
+        let spec = HostedJobSpec(input: input, label: label, gpu: gpu,
+                                 wallLimitS: Int(wallH * 3600), estimateS: Int(estMin * 60))
+        let id: String
+        do { id = try client.submit(input: input, spec: spec) } catch { fail(error.localizedDescription) }
+        print("mdengine: submitted \(id) → \(client.base.host ?? "endpoint") (gpu \(gpu), wall limit \(wallH) h)")
+        if noWait {
+            print("poll:  mdengine job \(id)\nfetch: mdengine job \(id) --fetch")
+            exit(0)
+        }
+        exit(hostedWaitAndFetch(client, id))
+    }
     guard let input = args.first else { fail("usage: mdengine run <input> [--threads N] [--lmp PATH]") }
     args.removeFirst()
     let threads = Int(takeOption("--threads", &args) ?? "") ?? performanceCores()
@@ -250,6 +306,57 @@ case "run":
     do { try task.run() } catch { fail("failed to launch LAMMPS: \(error.localizedDescription)") }
     task.waitUntilExit()
     exit(task.terminationStatus)
+
+case "login":
+    guard let key = args.first, key.hasPrefix("mde_") else { fail("usage: mdengine login <mde_key> [--endpoint URL]") }
+    args.removeFirst()
+    let endpoint = takeOption("--endpoint", &args)
+    let creds = HostedCredentials(apiKey: key, endpoint: endpoint)
+    do {
+        let acct = try HostedClient(credentials: creds).me()   // verify before storing
+        try creds.save()
+        print("logged in — balance $\(String(format: "%.2f", acct.balance_usd)); key stored in \(HostedCredentials.fileURL.path) (0600)")
+    } catch { fail(error.localizedDescription) }
+
+case "account":
+    do {
+        let client = try HostedClient.fromSavedCredentials()
+        let acct = try client.me()
+        print("endpoint: \(client.base.absoluteString)")
+        print("balance:  $\(String(format: "%.2f", acct.balance_usd))")
+        let rates = acct.rate_table.sorted { $0.key < $1.key }.map { "\($0.key) $\(String(format: "%.2f", $0.value))/h" }
+        print("rates:    \(rates.joined(separator: ", "))")
+        print("credits:  https://forcefieldsilicon.com/mdengine")
+    } catch { fail(error.localizedDescription) }
+
+case "jobs":
+    do {
+        let jobs = try HostedClient.fromSavedCredentials().list()
+        if jobs.isEmpty { print("(no hosted jobs)") }
+        for j in jobs { print(j.summary + (j.created.map { "  \($0)" } ?? "")) }
+    } catch { fail(error.localizedDescription) }
+
+case "job":
+    guard let id = args.first else { fail("usage: mdengine job <id> [--log|--fetch|--cancel|--wait]") }
+    args.removeFirst()
+    let client: HostedClient
+    do { client = try HostedClient.fromSavedCredentials() } catch { fail(error.localizedDescription) }
+    do {
+        if takeFlag("--cancel", &args) {
+            print(try client.cancel(id).summary)
+        } else if takeFlag("--fetch", &args) {
+            let dir = try client.fetch(id)
+            print("results → \(dir.path)")
+            if let t = HostedClient.primaryTrajectory(in: dir) { print("trajectory: \(t.path)\nopen: mdengine gui && open -a MDEngine \(shellQuoteCLI(t.path))") }
+        } else if takeFlag("--wait", &args) {
+            exit(hostedWaitAndFetch(client, id))
+        } else {
+            let s = try client.status(id)
+            print(s.summary)
+            _ = takeFlag("--log", &args)   // status always includes the thermo tail; --log is accepted for symmetry
+            for line in (s.thermo_tail ?? []).suffix(12) { print("  " + line) }
+        }
+    } catch { fail(error.localizedDescription) }
 
 case "gui":
     let task = Process()
