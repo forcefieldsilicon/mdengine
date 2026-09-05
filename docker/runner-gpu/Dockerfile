@@ -38,17 +38,18 @@ RUN cmake -S /src/cmake -B /build \
 # ---------- runtime stage ----------
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    libgomp1 openssh-server rsync ca-certificates \
+    libgomp1 openssh-server rsync ca-certificates curl python3 \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /run/sshd /work /root/.ssh && chmod 700 /root/.ssh
 COPY --from=build /opt/lammps/bin/lmp /usr/local/bin/lmp
 COPY --from=build /src/potentials /usr/local/share/lammps/potentials
-COPY start.sh /usr/local/bin/start.sh
-RUN chmod +x /usr/local/bin/start.sh
+COPY start.sh runner.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/start.sh /usr/local/bin/runner.sh
 ENV LAMMPS_POTENTIALS=/usr/local/share/lammps/potentials \
     OMP_NUM_THREADS=1
 WORKDIR /work
 EXPOSE 22
+# Two modes: (a) MDE_JOB_ID set -> pull-runner (production, hosted/CONTRACT.md); (b) otherwise dev mode:
 # PUBLIC_KEY env (RunPod convention) -> authorized_keys; then sshd in the foreground.
 # Running `lmp` directly (no sshd) also works: docker run --gpus all ... mdengine-runner-gpu lmp -in deck.in -k on g 1 -sf kk
 CMD ["/usr/local/bin/start.sh"]

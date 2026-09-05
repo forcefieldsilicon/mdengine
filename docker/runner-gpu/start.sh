@@ -1,6 +1,7 @@
 #!/bin/sh
 # Pod entrypoint: install the operator's public key, report the GPU, serve ssh.
 set -eu
+if [ -n "${MDE_JOB_ID:-}" ]; then exec /usr/local/bin/runner.sh; fi   # production: pull one job, exit
 if [ -n "${PUBLIC_KEY:-}" ]; then
   printf '%s\n' "$PUBLIC_KEY" >> /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
