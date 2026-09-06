@@ -10,6 +10,9 @@ Evolved from hosted/mock/mock_endpoint.py: same routes and JSON shapes for the c
   * GET  /welcome?session_id=...           Stripe Checkout redirect target: issue/credit a key
   * POST /v1/stripe/webhook                checkout.session.completed backstop (same handler)
   * Job submission gated by MDE_RUNNERS_OPEN=1 (auth + balance still checked while closed).
+  * RunPod pod launcher (mde_launcher.py) when RUNPOD_API_KEY is set: one pod per job, deleted at every
+    terminal state; watchdog handles launch timeout / pod_lost; reaper enforces "a pod exists only while
+    a job is launching/running" (CONTRACT.md, GJOB-099). Without the key `start` writes launch.env (dev).
 
 Runs behind Caddy (TLS) on 127.0.0.1:8080 under systemd; see deploy/ and README.md.
 
@@ -18,6 +21,9 @@ Runs behind Caddy (TLS) on 127.0.0.1:8080 under systemd; see deploy/ and README.
 import argparse, hashlib, hmac, json, os, secrets, sqlite3, sys, threading, time, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mde_launcher import RunPodLauncher, FakeLauncher, NoCapacity, LauncherError, parse_ladder, pod_age_s
 
 VERSION = "0.1.0"
 STATES = "created uploaded queued launching running uploading done failed cancelled".split()
@@ -28,6 +34,8 @@ BLOB_TTL_S = 7 * 86400              # signed blob URLs stay valid for a week (re
 HEARTBEAT_LOST_S = 120              # 30 s heartbeat, 3 missed -> pod_lost
 PENDING_KEY_TTL_S = 7 * 86400       # unshown keys from webhook-first purchases are purged after this
 STRIPE_TOLERANCE_S = 300
+REAPER_GRACE_S = 1200               # reaper kills a pod older than its job's wall_limit_s + this (CONTRACT: +20 min)
+POD_PREFIX = "mde-"
 
 # ----------------------------------------------------------------------------- helpers
 
@@ -82,6 +90,14 @@ class Config:
         self.runners_open = e.get("MDE_RUNNERS_OPEN", "") == "1"
         self.admin_token = e.get("MDE_ADMIN_TOKEN", "")
         self.brand = "ForceField Silicon / MDEngine"
+        # RunPod launcher (mde_launcher.py). No RUNPOD_API_KEY -> no launcher -> `start` writes launch.env.
+        self.runpod_api_key = e.get("RUNPOD_API_KEY", "")
+        self.runner_image = e.get("MDE_RUNNER_IMAGE", "")             # default in mde_launcher.DEFAULT_IMAGE
+        self.pod_disk_gb = int(e.get("MDE_POD_DISK_GB", "20") or 20)
+        self.min_cuda = e.get("MDE_MIN_CUDA", "12.4")
+        self.gpu_ladder = parse_ladder(e.get("MDE_GPU_LADDER", ""))
+        self.launch_timeout_s = int(e.get("MDE_LAUNCH_TIMEOUT_S", "600") or 600)
+        self.reaper_interval_s = int(e.get("MDE_REAPER_INTERVAL_S", "300") or 300)
 
 # ----------------------------------------------------------------------------- storage
 
@@ -93,13 +109,14 @@ create table if not exists credits(session_id text primary key, key_id text not 
 create table if not exists jobs(id text primary key, key_id text not null, token_hash text, spec text not null,
   state text not null, created text not null, started text, finished text, gpu text, rate real,
   billed_s integer default 0, thermo text default '[]', exitcode integer, error text, attempt integer default 1,
-  last_hb real);
+  last_hb real, pod_id text, launched_at text);
 create table if not exists pending_keys(session_id text primary key, key_id text not null, full_key text not null,
   created text not null);
 create table if not exists meta(k text primary key, v text not null);
 create index if not exists jobs_key on jobs(key_id, created);
 create index if not exists credits_key on credits(key_id);
 """
+MIGRATIONS = ["alter table jobs add column pod_id text", "alter table jobs add column launched_at text"]
 
 class DB:
     """sqlite wrapper shared by the service and the admin CLI. All access under one RLock."""
@@ -110,6 +127,10 @@ class DB:
         self.c.row_factory = sqlite3.Row
         with self.lock:
             self.c.execute("pragma journal_mode=wal"); self.c.executescript(SCHEMA)
+            for m in MIGRATIONS:                     # idempotent: pre-launcher databases gain the new columns
+                try: self.c.execute(m); self.c.commit()
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e): raise
             if not self.meta("blob_secret"): self.set_meta("blob_secret", secrets.token_hex(32))
 
     def q(self, sql, *args):
@@ -152,6 +173,7 @@ class DB:
 
     # jobs
     def job(self, jid): return self.one("select * from jobs where id=?", jid)
+    def job_by_pod(self, pod_id): return self.one("select * from jobs where pod_id=?", pod_id) if pod_id else None
     def set_job(self, jid, **kw):
         cols = ", ".join(f"{k}=?" for k in kw); self.x(f"update jobs set {cols} where id=?", *kw.values(), jid)
 
@@ -170,7 +192,8 @@ def status(j):
     return {"id": j["id"], "state": j["state"], "states": "|".join(STATES), "created": j["created"],
             "started": j["started"], "finished": j["finished"], "gpu": j["gpu"], "rate_usd_per_h": j["rate"],
             "billed_s": billed, "cost_usd": round(job_cost(j), 4), "thermo_tail": json.loads(j["thermo"] or "[]"),
-            "exitcode": j["exitcode"], "error": j["error"], "attempt": j["attempt"], "label": spec.get("label")}
+            "exitcode": j["exitcode"], "error": j["error"], "attempt": j["attempt"], "label": spec.get("label"),
+            "pod_id": j["pod_id"]}
 
 # ----------------------------------------------------------------------------- Stripe
 
@@ -205,6 +228,23 @@ class App:
         self.grant_lock = threading.Lock()
         self.public_url = cfg.public_url or "http://" + cfg.bind
         self.launch_env = os.path.join(os.path.dirname(os.path.abspath(cfg.blobs)), "launch.env")
+        self.launcher = RunPodLauncher(cfg, public_url=self.public_url) if cfg.runpod_api_key else None   # tests inject FakeLauncher
+        self.reaper_fail = {}          # pod_id -> consecutive reaper delete failures (in memory; 3 = reaper.stuck)
+        self.last_reap = 0.0
+        self._bg = []; self._bg_lock = threading.Lock()
+
+    # -- background work (pod create/delete never blocks an HTTP response); join_bg() is for tests
+    def spawn(self, target, *args):
+        t = threading.Thread(target=target, args=args, daemon=True)
+        with self._bg_lock:
+            self._bg = [x for x in self._bg if x.is_alive()]; self._bg.append(t)
+        t.start(); return t
+    def join_bg(self, timeout=10):
+        deadline = time.time() + timeout
+        while True:
+            with self._bg_lock: live = [x for x in self._bg if x.is_alive()]
+            if not live or time.time() > deadline: return not live
+            live[0].join(max(0.01, deadline - time.time()))
 
     # -- blob URLs stand in for presigned object-storage URLs: HMAC over name|exp
     def blob_path(self, name): return os.path.join(self.cfg.blobs, name)
@@ -265,17 +305,86 @@ class App:
         cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - PENDING_KEY_TTL_S))
         self.db.x("delete from pending_keys where created < ?", cutoff)
 
-    # -- watchdog: running jobs whose pod stopped heartbeating are pod_lost (not billed)
+    # -- pods: one per job, created after `start`, deleted at every terminal state
+    def launch_job(self, jid, token, wall, gpu):
+        """Background: walk the launcher's ladder; queued -> launching(pod_id) or failed:no_capacity (unbilled)."""
+        try: pod_id = self.launcher.create(jid, token, wall, gpu)
+        except NoCapacity as e:
+            log("job.no_capacity", job=jid, error=str(e)); self.fail_unlaunched(jid); return
+        except Exception as e:
+            log("launch.error", job=jid, error=repr(e)); self.fail_unlaunched(jid); return
+        j = self.db.job(jid)
+        if not j: self.release_pod(jid, pod_id, "job_vanished"); return
+        if j["state"] == "queued": self.db.set_job(jid, state="launching", pod_id=pod_id, launched_at=now())
+        elif j["state"] in ("launching", "running"): self.db.set_job(jid, pod_id=pod_id, launched_at=j["launched_at"] or now())
+        else:                                        # cancelled while the create call was in flight: no orphan
+            self.db.set_job(jid, pod_id=pod_id); self.release_pod(jid, pod_id, "terminal_during_launch"); return
+        log("job.launching", job=jid, key_id=j["key_id"], pod_id=pod_id)
+
+    def fail_unlaunched(self, jid):
+        j = self.db.job(jid)
+        if j and j["state"] in ("queued", "launching"):
+            self.db.set_job(jid, state="failed", finished=now(), error="no_capacity", token_hash=None)
+
+    def release_pod(self, jid, pod_id, reason):
+        """Delete the job's pod in the background (never from the request thread)."""
+        if not self.launcher or not pod_id: return
+        def run():
+            try: self.launcher.delete(pod_id); log("pod.deleted", job=jid, pod_id=pod_id, reason=reason)
+            except Exception as e: log("pod.delete_failed", job=jid, pod_id=pod_id, reason=reason, error=repr(e))
+        self.spawn(run)
+
+    def finish_job(self, j, log_ev, **fields):
+        """Terminal write + pod release + log, in that order (state first so a crash mid-way leaves the reaper a terminal job)."""
+        self.db.set_job(j["id"], **fields)
+        cur = self.db.job(j["id"])
+        log(log_ev, job=j["id"], key_id=j["key_id"], **{k: v for k, v in fields.items() if k in ("state", "error", "billed_s", "exitcode")},
+            cost_usd=round(job_cost(cur), 4), pod_id=cur["pod_id"])
+        self.release_pod(j["id"], cur["pod_id"], fields.get("error") or fields.get("state"))
+        return cur
+
+    # -- watchdog: lost heartbeats -> pod_lost; launching too long -> no_capacity (neither is billed)
     def watchdog_once(self):
         cutoff = time.time() - HEARTBEAT_LOST_S
         for j in self.db.q("select * from jobs where state='running' and last_hb is not null and last_hb < ?", cutoff):
-            self.db.set_job(j["id"], state="failed", finished=now(), error="pod_lost", token_hash=None)
-            log("job.pod_lost", job=j["id"], key_id=j["key_id"])
+            self.finish_job(j, "job.pod_lost", state="failed", finished=now(), error="pod_lost", token_hash=None)
+        lcut = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - self.cfg.launch_timeout_s))
+        for j in self.db.q("select * from jobs where state='launching' and last_hb is null and launched_at is not null and launched_at < ?", lcut):
+            self.finish_job(j, "job.launch_timeout", state="failed", finished=now(), error="no_capacity", token_hash=None)
+
+    # -- reaper (CONTRACT "Pod lifecycle", GJOB-099): a pod exists only while a job is launching/running
+    def reaper_once(self):
+        if not self.launcher: return 0
+        try: pods = self.launcher.list_pods()
+        except Exception as e: log("reaper.list_failed", error=repr(e)); return 0
+        self.last_reap = time.time(); n = 0
+        for p in pods:
+            pid = p.get("id"); name = p.get("name") or ""
+            if not pid or not name.startswith(POD_PREFIX): continue
+            j = self.db.job_by_pod(pid) or self.db.job(name[len(POD_PREFIX):])
+            reason = None
+            if not j: reason = "no_job"
+            elif j["state"] in TERMINAL: reason = "job_terminal"
+            else:
+                age = pod_age_s(p); wall = int((json.loads(j["spec"]).get("wall_limit_s")) or 86400)
+                if age is not None and age > wall + REAPER_GRACE_S: reason = "overage"
+            if not reason: self.reaper_fail.pop(pid, None); continue
+            try:
+                self.launcher.delete(pid); self.reaper_fail.pop(pid, None); n += 1
+                log("reaper.deleted", pod_id=pid, name=name, job=j["id"] if j else None, reason=reason, status=p.get("status"))
+            except Exception as e:
+                k = self.reaper_fail[pid] = self.reaper_fail.get(pid, 0) + 1
+                log("reaper.delete_failed", pod_id=pid, name=name, reason=reason, failures=k, error=repr(e))
+                if k >= 3: log("reaper.stuck", pod_id=pid, name=name, reason=reason, failures=k)
+        return n
 
     def watchdog_loop(self, stop):
         while not stop.wait(30):
             try: self.watchdog_once(); self.purge_pending()
             except Exception as e: log("watchdog.error", error=repr(e))
+            if self.launcher and time.time() - self.last_reap >= self.cfg.reaper_interval_s:
+                try: self.reaper_once()
+                except Exception as e: log("reaper.error", error=repr(e))
 
 # ----------------------------------------------------------------------------- HTTP
 
@@ -321,7 +430,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path); p = u.path.rstrip("/") or "/"; parts = p.split("/")
         db = self.app.db
         if p == "/v1/health":
-            return self.send(200, {"ok": True, "version": VERSION, "runners": "open" if self.app.cfg.runners_open else "closed"})
+            return self.send(200, {"ok": True, "version": VERSION, "runners": "open" if self.app.cfg.runners_open else "closed",
+                                   "launcher": self.app.launcher.kind if self.app.launcher else "none"})
         if p == "/welcome": return self.welcome(parse_qs(u.query))
         if parts[1] == "blob" and len(parts) == 3:
             name = parts[2]
@@ -448,8 +558,7 @@ mdengine run --gpu in.lmp</pre>
                 have = os.path.exists(self.app.blob_path(f"{j['id']}.out.tar.gz"))
                 state = "done" if rc == 0 and have else "failed"
                 if not have and not err: err = "no_results"
-                db.set_job(j["id"], state=state, finished=now(), started=started, exitcode=rc, error=err, billed_s=billed, token_hash=None)
-                log("job.finished", job=j["id"], key_id=j["key_id"], state=state, rc=rc, error=err, billed_s=billed, cost_usd=round(job_cost(db.job(j["id"])), 4))
+                self.app.finish_job(j, "job.finished", state=state, finished=now(), started=started, exitcode=rc, error=err, billed_s=billed, token_hash=None)
                 return self.send(200, {"ok": True, "state": state})
             return self.send(404, {"error": "no route"})
         k = self.api_key()
@@ -468,6 +577,7 @@ mdengine run --gpu in.lmp</pre>
                 log("job.refused_closed", key_id=k["key_id"])
                 return self.send(503, {"error": "gpu_runners_open_soon", "message": "GPU runners open this week; your credits are safe and never expire."})
             jid = job_id()
+            spec["wall_limit_s"] = wall
             db.x("insert into jobs(id,key_id,spec,state,created,gpu,rate) values(?,?,?,?,?,?,?)",
                  jid, k["key_id"], json.dumps(spec), "created", now(), gpu, rate)
             url, exp = self.app.blob_url(f"{jid}.in.tar.gz", ttl=3600)
@@ -479,10 +589,13 @@ mdengine run --gpu in.lmp</pre>
             if j["state"] != "uploaded": return self.send(409, {"error": f"state is {j['state']}"})
             tok = "jt_" + secrets.token_hex(16)                      # minted here, stored hashed, handed to the pod only
             db.set_job(j["id"], state="queued", token_hash=sha256(tok))
-            # Pod launcher (RunPod) plugs in here. Until then the launch env is written to disk for a hand-run pod.
-            with open(self.app.launch_env, "w", opener=lambda f, fl: os.open(f, fl, 0o600)) as fh:
-                fh.write(f"MDE_ENDPOINT={self.app.public_url}\nMDE_JOB_ID={j['id']}\nMDE_JOB_TOKEN={tok}\n")
-            log("job.queued", job=j["id"], key_id=k["key_id"])
+            spec = json.loads(j["spec"]); wall = int(spec.get("wall_limit_s") or 86400)
+            if self.app.launcher:                                    # background: queued -> launching | failed:no_capacity
+                self.app.spawn(self.app.launch_job, j["id"], tok, wall, j["gpu"])
+            else:                                                    # dev path: launch env on disk for a hand-run pod
+                with open(self.app.launch_env, "w", opener=lambda f, fl: os.open(f, fl, 0o600)) as fh:
+                    fh.write(f"MDE_ENDPOINT={self.app.public_url}\nMDE_JOB_ID={j['id']}\nMDE_JOB_TOKEN={tok}\n")
+            log("job.queued", job=j["id"], key_id=k["key_id"], launcher=bool(self.app.launcher))
             return self.send(202, {"id": j["id"], "state": "queued"})
         self.send(404, {"error": "no route"})
 
@@ -516,9 +629,8 @@ mdengine run --gpu in.lmp</pre>
         if not j or j["key_id"] != k["key_id"]: return self.send(404, {"error": "no job"})
         if j["state"] in TERMINAL: return self.send(409, {"error": "terminal"})
         billed = billed_seconds(j) if j["state"] == "running" else 0
-        db.set_job(j["id"], state="cancelled", finished=now(), error="cancelled", billed_s=billed, token_hash=None)
-        log("job.cancelled", job=j["id"], key_id=k["key_id"], billed_s=billed)
-        self.send(202, status(db.job(j["id"])))
+        cur = self.app.finish_job(j, "job.cancelled", state="cancelled", finished=now(), error="cancelled", billed_s=billed, token_hash=None)
+        self.send(202, status(cur))
 
 # ----------------------------------------------------------------------------- server
 
@@ -530,6 +642,7 @@ def make_server(cfg: Config):
     srv = ThreadingHTTPServer((host or "127.0.0.1", int(port or 8080)), handler)
     srv.daemon_threads = True
     if not cfg.public_url: app.public_url = "http://%s:%d" % srv.server_address[:2]
+    if app.launcher: app.launcher.public_url = app.public_url
     return srv, app
 
 def main(argv=None):
@@ -537,9 +650,13 @@ def main(argv=None):
     ap.add_argument("--env-file", default=os.environ.get("MDE_ENV_FILE"), help="KEY=VALUE file; existing env wins")
     a = ap.parse_args(argv); load_env_file(a.env_file)
     cfg = Config(); srv, app = make_server(cfg)
-    stop = threading.Event(); threading.Thread(target=app.watchdog_loop, args=(stop,), daemon=True).start()
     log("start", version=VERSION, bind=cfg.bind, public_url=app.public_url, runners="open" if cfg.runners_open else "closed",
-        packs=len(cfg.packs), stripe=bool(cfg.stripe_secret), webhook=bool(cfg.webhook_secret), db=cfg.db)
+        packs=len(cfg.packs), stripe=bool(cfg.stripe_secret), webhook=bool(cfg.webhook_secret), db=cfg.db,
+        launcher=app.launcher.kind if app.launcher else "none", ladder=cfg.gpu_ladder if app.launcher else None)
+    if app.launcher:                                  # boot-time reap: an endpoint outage must not leave orphans behind it
+        try: log("reaper.boot", deleted=app.reaper_once())
+        except Exception as e: log("reaper.error", error=repr(e))
+    stop = threading.Event(); threading.Thread(target=app.watchdog_loop, args=(stop,), daemon=True).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
     finally: stop.set(); srv.server_close(); log("stop")

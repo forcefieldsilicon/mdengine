@@ -1,13 +1,15 @@
-Packages
+__pycache__/
+! .env.example
 .build
-xcuserdata
-*.xcodeproj
-DerivedData/
 .DS_Store
-db.sqlite
-.swiftpm
 .env
 .env.*
-! .env.example
+.swiftpm
 .vscode
+*.pyc
+*.xcodeproj
+db.sqlite
+DerivedData/
 dist/
+Packages
+xcuserdata

@@ -10,6 +10,7 @@ from contextlib import redirect_stdout
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mde_endpoint as E
 import mde_admin as A
+import mde_launcher as L
 
 PRICE_STARTER, PRICE_LAB = "price_test_starter", "price_test_lab"
 WEBHOOK_SECRET = "whsec_test_" + "a" * 20
@@ -27,7 +28,7 @@ def fake_fetch(sid, secret):
     return FAKE_SESSIONS[sid]
 
 class Server:
-    def __init__(self, runners_open=False):
+    def __init__(self, runners_open=False, launcher=None):
         self.dir = tempfile.mkdtemp(prefix="mde-test-")
         env = {"MDE_DB": os.path.join(self.dir, "t.sqlite"), "MDE_BLOBS": os.path.join(self.dir, "blobs"), "MDE_BIND": "127.0.0.1:0",
                "STRIPE_SECRET_KEY": "sk_test_fake", "STRIPE_WEBHOOK_SECRET": WEBHOOK_SECRET,
@@ -35,6 +36,7 @@ class Server:
                "MDE_ADMIN_TOKEN": "admintok"}
         self.cfg = E.Config(env); self.srv, self.app = E.make_server(self.cfg)
         self.base = self.app.public_url
+        if launcher is not None: launcher.public_url = self.base; self.app.launcher = launcher
         self.t = threading.Thread(target=self.srv.serve_forever, daemon=True); self.t.start()
     def close(self):
         self.srv.shutdown(); self.srv.server_close(); self.app.db.c.close(); shutil.rmtree(self.dir, ignore_errors=True)
@@ -64,9 +66,11 @@ class Server:
 
 class Base(unittest.TestCase):
     runners_open = False
+    fake_launcher = False
     def setUp(self):
         self._orig = E.stripe_fetch_session; E.stripe_fetch_session = fake_fetch; FAKE_SESSIONS.clear()
-        self.s = Server(self.runners_open); self._log = io.StringIO(); self._logpatch = redirect_stdout(self._log); self._logpatch.__enter__()
+        self.fake = L.FakeLauncher() if self.fake_launcher else None
+        self.s = Server(self.runners_open, launcher=self.fake); self._log = io.StringIO(); self._logpatch = redirect_stdout(self._log); self._logpatch.__enter__()
     def tearDown(self):
         self._logpatch.__exit__(None, None, None); self.s.close(); E.stripe_fetch_session = self._orig
 
@@ -273,7 +277,188 @@ class TestJobFlowWhenOpen(Base):
         j2 = self.s.js("POST", "/v1/jobs", body={"input": "in.lmp"}, key=full)[1]["id"]
         code, st = self.s.js("DELETE", f"/v1/jobs/{j2}", key=full); self.assertEqual(code, 202); self.assertEqual(st["state"], "cancelled")
 
+class TestLauncherFlow(Base):
+    """Job lifecycle with a FakeLauncher injected: pods are created at start and gone at every terminal state."""
+    runners_open = True; fake_launcher = True
+
+    def started_job(self, credit=20):
+        full, kid = self.s.admin_key(credit)
+        jid = self.s.js("POST", "/v1/jobs", body={"input": "in.lmp", "gpu": "rtx4090", "wall_limit_s": 3600}, key=full)[1]["id"]
+        self.s.req("PUT", self.s.app.blob_url(f"{jid}.in.tar.gz")[0], raw=b"deck")
+        code, j = self.s.js("POST", f"/v1/jobs/{jid}/start", key=full); self.assertEqual((code, j["state"]), (202, "queued"))
+        self.assertTrue(self.s.app.join_bg()); return full, jid
+
+    def pod_token(self, jid):
+        pod = self.s.app.db.job(jid)["pod_id"]; return self.fake.pods[pod]["env"]["MDE_JOB_TOKEN"]
+
+    def test_start_launches_pod_then_done_deletes_it(self):
+        self.assertEqual(self.s.js("GET", "/v1/health")[1]["launcher"], "fake")
+        full, jid = self.started_job()
+        self.assertFalse(os.path.exists(self.s.app.launch_env))                       # no dev launch.env with a launcher
+        row = self.s.app.db.job(jid); st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual(st["state"], "launching"); self.assertEqual(st["pod_id"], row["pod_id"]); self.assertTrue(row["launched_at"])
+        pod = self.fake.pods[row["pod_id"]]
+        self.assertEqual(pod["name"], "mde-" + jid); self.assertEqual(pod["env"]["MDE_JOB_ID"], jid); self.assertEqual(pod["env"]["MDE_ENDPOINT"], self.s.base)
+        tok = pod["env"]["MDE_JOB_TOKEN"]; self.assertTrue(tok.startswith("jt_")); self.assertEqual(row["token_hash"], E.sha256(tok))
+        self.assertNotIn(tok, self._log.getvalue())
+        # Pod boots, heartbeats -> running; results; done -> pod deleted in the background.
+        code, spec = self.s.js("GET", f"/internal/jobs/{jid}", key=tok); self.assertEqual(code, 200); self.assertEqual(spec["wall_limit_s"], 3600)
+        self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": ["x"], "elapsed_s": 1}, key=tok)
+        self.assertEqual(self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]["state"], "running")
+        self.s.req("PUT", spec["results_put_url"], raw=b"out")
+        code, j = self.s.js("POST", f"/internal/jobs/{jid}/done", body={"exitcode": 0, "elapsed_s": 10, "results_bytes": 3}, key=tok)
+        self.assertEqual((code, j["state"]), (200, "done")); self.assertTrue(self.s.app.join_bg())
+        self.assertEqual(self.fake.deleted, [row["pod_id"]]); self.assertEqual(self.fake.pods, {})
+        self.assertIn('"ev":"pod.deleted"', self._log.getvalue())
+        self.assertEqual(self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]["billed_s"], 10)
+
+    def test_cancel_deletes_pod(self):
+        full, jid = self.started_job(); pod = self.s.app.db.job(jid)["pod_id"]
+        code, st = self.s.js("DELETE", f"/v1/jobs/{jid}", key=full); self.assertEqual((code, st["state"]), (202, "cancelled"))
+        self.assertTrue(self.s.app.join_bg()); self.assertEqual(self.fake.deleted, [pod]); self.assertEqual(self.fake.pods, {})
+
+    def test_pod_lost_deletes_pod_unbilled(self):
+        full, jid = self.started_job(); pod = self.s.app.db.job(jid)["pod_id"]; tok = self.pod_token(jid)
+        self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": [], "elapsed_s": 0}, key=tok)
+        self.s.app.db.set_job(jid, last_hb=time.time() - 1000, started="2020-01-01T00:00:00Z")
+        self.s.app.watchdog_once(); self.assertTrue(self.s.app.join_bg())
+        st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["state"], st["error"], st["cost_usd"]), ("failed", "pod_lost", 0.0))
+        self.assertEqual(self.fake.deleted, [pod]); self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 20.0)
+
+    def test_launch_timeout_is_no_capacity_and_deletes_pod(self):
+        full, jid = self.started_job(); pod = self.s.app.db.job(jid)["pod_id"]
+        self.s.app.watchdog_once(); self.assertEqual(self.s.app.db.job(jid)["state"], "launching")         # fresh: untouched
+        self.s.app.db.set_job(jid, launched_at="2020-01-01T00:00:00Z")
+        self.s.app.watchdog_once(); self.assertTrue(self.s.app.join_bg())
+        st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["state"], st["error"], st["cost_usd"]), ("failed", "no_capacity", 0.0))
+        self.assertEqual(self.fake.deleted, [pod]); self.assertIsNone(self.s.app.db.job(jid)["token_hash"])
+        self.assertIn('"ev":"job.launch_timeout"', self._log.getvalue())
+        self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 20.0)
+
+    def test_no_capacity_from_launcher(self):
+        self.fake.fail_create = True
+        full, jid = self.started_job()
+        st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["state"], st["error"], st["cost_usd"], st["pod_id"]), ("failed", "no_capacity", 0.0, None))
+        self.assertEqual(self.fake.pods, {}); self.assertIsNone(self.s.app.db.job(jid)["token_hash"])
+        self.assertIn('"ev":"job.no_capacity"', self._log.getvalue())
+        self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 20.0)
+
+    def test_reaper(self):
+        full, jid = self.started_job(); live = self.s.app.db.job(jid)["pod_id"]
+        orphan = self.fake.add_pod("mde-MDJOB-20260101-NOJOB1")
+        other = self.fake.add_pod("someone-elses-pod")                                             # not ours: never touched
+        # A terminal job whose pod delete failed earlier (simulate by re-adding the pod after cancel).
+        full2, jid2 = self.started_job(); self.s.js("DELETE", f"/v1/jobs/{jid2}", key=full2); self.s.app.join_bg()
+        stale = self.fake.add_pod("mde-" + jid2, pod_id=self.s.app.db.job(jid2)["pod_id"]); self.fake.deleted.clear()
+        # A running job whose pod is older than wall_limit_s + 20 min.
+        full3, jid3 = self.started_job(); old = self.s.app.db.job(jid3)["pod_id"]
+        self.fake.pods[old]["createdAt"] = "2020-01-01T00:00:00.000Z"
+        n = self.s.app.reaper_once()
+        self.assertEqual(n, 3); self.assertEqual(sorted(self.fake.deleted), sorted([orphan, stale, old]))
+        self.assertIn(live, self.fake.pods); self.assertIn(other, self.fake.pods)
+        logs = self._log.getvalue()
+        for reason in ("no_job", "job_terminal", "overage"): self.assertIn('"reason":"%s"' % reason, logs)
+        # Stuck pod: three failed passes -> reaper.stuck.
+        stuck = self.fake.add_pod("mde-MDJOB-20260101-STUCK1"); self.fake.fail_delete.add(stuck)
+        for _ in range(3): self.s.app.reaper_once()
+        self.assertEqual(self.s.app.reaper_fail[stuck], 3); self.assertIn('"ev":"reaper.stuck"', self._log.getvalue())
+        self.fake.fail_delete.clear(); self.s.app.reaper_once(); self.assertNotIn(stuck, self.s.app.reaper_fail)
+
+class TestRunPodLauncher(unittest.TestCase):
+    """Request shaping against a monkeypatched transport; no network."""
+    KEY = "rpa_TESTKEY_" + "z" * 24
+    def launcher(self, **env):
+        base = {"RUNPOD_API_KEY": self.KEY, "MDE_PUBLIC_URL": "https://api.example.test/", "MDE_DB": "/nonexistent/x.sqlite"}
+        base.update(env); return L.RunPodLauncher(E.Config(base))
+
+    def test_create_body_and_ladder(self):
+        lc = self.launcher(); calls = []
+        def fake_request(method, path, body=None):
+            calls.append((method, path, body)); return (500, '{"error":"no capacity"}') if len(calls) == 1 else (201, '{"id":"pod123","name":"x"}')
+        lc._request = fake_request
+        log = io.StringIO()
+        with redirect_stdout(log): pid = lc.create("MDJOB-20260906-ABC123", "jt_" + "0" * 32, 3600, "rtx4090")
+        self.assertEqual(pid, "pod123"); self.assertEqual(len(calls), 2)
+        for (m, p, b), (cloud, gid) in zip(calls, L.DEFAULT_LADDER):
+            self.assertEqual((m, p), ("POST", "/v2/pods")); self.assertEqual(b["cloud"], cloud)
+            self.assertEqual(b["gpu"], {"id": gid, "count": 1, "minCudaVersion": "12.4"}); self.assertEqual(b["disk"], 20)
+            self.assertEqual(b["name"], "mde-MDJOB-20260906-ABC123"); self.assertEqual(b["image"], L.DEFAULT_IMAGE)
+            self.assertEqual(b["env"], {"MDE_ENDPOINT": "https://api.example.test", "MDE_JOB_ID": "MDJOB-20260906-ABC123", "MDE_JOB_TOKEN": "jt_" + "0" * 32})
+            self.assertNotIn("dataCenterIds", b)
+        out = log.getvalue(); self.assertEqual(out.count('"ev":"launch.attempt"'), 2); self.assertIn('"code":500', out)
+        self.assertNotIn(self.KEY, out); self.assertNotIn("jt_" + "0" * 32, out)
+
+    def test_config_overrides(self):
+        lc = self.launcher(MDE_RUNNER_IMAGE="ghcr.io/x/y:z", MDE_POD_DISK_GB="40", MDE_MIN_CUDA="12.8",
+                           MDE_GPU_LADDER="SECURE:NVIDIA A100 80GB PCIe, community:NVIDIA GeForce RTX 4090")
+        self.assertEqual(lc.ladder, [("SECURE", "NVIDIA A100 80GB PCIe"), ("COMMUNITY", "NVIDIA GeForce RTX 4090")])
+        b = lc.pod_body("J", "t", "SECURE", "NVIDIA A100 80GB PCIe")
+        self.assertEqual((b["image"], b["disk"], b["gpu"]["minCudaVersion"]), ("ghcr.io/x/y:z", 40, "12.8"))
+        with self.assertRaises(ValueError): L.parse_ladder("PRIVATE:foo")
+        with self.assertRaises(ValueError): L.parse_ladder("nocolon")
+
+    def test_all_rungs_fail_is_no_capacity(self):
+        lc = self.launcher(); lc._request = lambda m, p, body=None: (422, '{"error":"bad"}')
+        with redirect_stdout(io.StringIO()), self.assertRaises(L.NoCapacity): lc.create("J", "t", 60, "any")
+        # 201 without an id is also a failed rung, and its body is not echoed.
+        lc._request = lambda m, p, body=None: (201, '{"env":{"MDE_JOB_TOKEN":"jt_secret"}}'); out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(L.NoCapacity): lc.create("J", "t", 60, "any")
+        self.assertNotIn("jt_secret", out.getvalue())
+
+    def test_delete_semantics(self):
+        lc = self.launcher(); lc.backoff_s = 0; seq = []
+        def scripted(codes):
+            it = iter(codes)
+            def f(m, p, body=None):
+                seq.append((m, p)); return next(it), "{}"
+            return f
+        lc._request = scripted([204]); self.assertTrue(lc.delete("p1"))
+        lc._request = scripted([404]); self.assertTrue(lc.delete("p1"))
+        lc._request = scripted([429, 500, 204]); self.assertTrue(lc.delete("p1"))
+        lc._request = scripted([500, 500, 500])
+        with self.assertRaises(L.LauncherError): lc.delete("p1")
+        seq.clear(); lc._request = scripted([403])
+        with self.assertRaises(L.LauncherError): lc.delete("p1")
+        self.assertEqual(seq, [("DELETE", "/v2/pods/p1")])                     # other 4xx: no retry
+
+    def test_get_and_list(self):
+        lc = self.launcher()
+        lc._request = lambda m, p, body=None: (200, '{"items":[{"id":"a","name":"mde-x"}]}')
+        self.assertEqual([p["id"] for p in lc.list_pods()], ["a"])
+        lc._request = lambda m, p, body=None: (200, '[{"id":"b"}]'); self.assertEqual(lc.list_pods()[0]["id"], "b")
+        lc._request = lambda m, p, body=None: (404, ""); self.assertIsNone(lc.get("zz"))
+        lc._request = lambda m, p, body=None: (200, '{"id":"zz","status":"RUNNING"}'); self.assertEqual(lc.get("zz")["status"], "RUNNING")
+        lc._request = lambda m, p, body=None: (500, "boom")
+        with self.assertRaises(L.LauncherError): lc.list_pods()
+
+    def test_authorization_header_and_url(self):
+        lc = self.launcher(); seen = []
+        def fake_open(req):
+            seen.append(req); return 204, ""
+        lc._open = fake_open; lc.delete("p9")
+        req = seen[0]; self.assertEqual(req.full_url, "https://api.runpod.io/v2/pods/p9"); self.assertEqual(req.get_method(), "DELETE")
+        auth = req.get_header("Authorization"); self.assertTrue(auth and auth.startswith("Bearer ") and len(auth) == len("Bearer ") + len(self.KEY))
+        self.assertEqual(req.timeout if hasattr(req, "timeout") else lc.timeout, lc.timeout)
+        with self.assertRaises(ValueError): L.RunPodLauncher(E.Config({"RUNPOD_API_KEY": "", "MDE_DB": "/nonexistent/x"}))
+
+    def test_pod_age(self):
+        self.assertAlmostEqual(L.pod_age_s({"createdAt": "2020-01-01T00:00:00.000Z"}, now_ts=1577836800 + 90), 90, places=3)
+        self.assertAlmostEqual(L.pod_age_s({"createdAt": "2020-01-01T01:00:00+01:00"}, now_ts=1577836800 + 5), 5, places=3)
+        self.assertIsNone(L.pod_age_s({"createdAt": "garbage"})); self.assertIsNone(L.pod_age_s({}))
+
 class TestUnits(unittest.TestCase):
+    def test_schema_migration_adds_pod_columns(self):
+        d = tempfile.mkdtemp(prefix="mde-mig-"); path = os.path.join(d, "old.sqlite")
+        import sqlite3
+        c = sqlite3.connect(path)
+        c.executescript(E.SCHEMA.replace(", pod_id text, launched_at text", "")); c.close()
+        db = E.DB(path); cols = {r["name"] for r in db.q("pragma table_info(jobs)")}
+        self.assertIn("pod_id", cols); self.assertIn("launched_at", cols)
+        db2 = E.DB(path); db.c.close(); db2.c.close(); shutil.rmtree(d, ignore_errors=True)      # second open: duplicate column ignored
+
     def test_signature_roundtrip(self):
         p = b'{"a":1}'; h = E.stripe_sign(p, "s")
         self.assertTrue(E.verify_stripe_signature(p, h, "s")); self.assertFalse(E.verify_stripe_signature(p, h, "t"))
