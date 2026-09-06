@@ -9,7 +9,7 @@ RunPod REST v2 (https://api.runpod.io/v2/openapi.json):
   POST   /v2/pods        201 Pod            create; any other status = this ladder rung failed
   GET    /v2/pods/{id}   200 Pod            status in PROVISIONING STARTING RUNNING EXITED ERROR TERMINATED
   DELETE /v2/pods/{id}   204 (404 = gone)   idempotent
-  GET    /v2/pods        200 {"items":[Pod]} (older shape: a bare list)
+  GET    /v2/pods        200 {"pods":[Pod]} (live) | {"items":[Pod]} (docs) | bare list
 
 Logging discipline: the API key is only ever a header; request bodies (they carry the job token) are never
 logged; Pod objects returned by RunPod carry the pod env (job token) and are never logged either -- only
@@ -149,7 +149,8 @@ class RunPodLauncher:
         code, text = self._request("GET", "/v2/pods")
         if code != 200: raise LauncherError("list pods: %d %s" % (code, trunc(text)))
         data = json.loads(text)
-        items = data.get("items") if isinstance(data, dict) else data
+        # live API (2026-09) wraps as {"pods":[...]}; OpenAPI example says {"items":[...]}; older: bare list
+        items = (data.get("pods") or data.get("items")) if isinstance(data, dict) else data
         return list(items or [])
 
 # ----------------------------------------------------------------------------- fake (tests / dry runs)

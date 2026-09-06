@@ -429,6 +429,8 @@ class TestRunPodLauncher(unittest.TestCase):
         lc._request = lambda m, p, body=None: (200, '{"items":[{"id":"a","name":"mde-x"}]}')
         self.assertEqual([p["id"] for p in lc.list_pods()], ["a"])
         lc._request = lambda m, p, body=None: (200, '[{"id":"b"}]'); self.assertEqual(lc.list_pods()[0]["id"], "b")
+        lc._request = lambda m, p, body=None: (200, '{"pods":[{"id":"c","name":"mde-y"}]}')   # LIVE shape (2026-09-06)
+        self.assertEqual([p["id"] for p in lc.list_pods()], ["c"])
         lc._request = lambda m, p, body=None: (404, ""); self.assertIsNone(lc.get("zz"))
         lc._request = lambda m, p, body=None: (200, '{"id":"zz","status":"RUNNING"}'); self.assertEqual(lc.get("zz")["status"], "RUNNING")
         lc._request = lambda m, p, body=None: (500, "boom")
