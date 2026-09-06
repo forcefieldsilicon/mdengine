@@ -39,6 +39,8 @@ install -o root -g root -m 755 "$SRC/mde_admin.py" /opt/mde/mde_admin.py
 ln -sf /opt/mde/mde_admin.py /usr/local/bin/mde-admin
 install -o root -g root -m 644 "$HERE/mde-endpoint.service" /etc/systemd/system/mde-endpoint.service
 install -o root -g root -m 644 "$HERE/Caddyfile" /etc/caddy/Caddyfile
+install -d -m 755 /etc/systemd/system/caddy.service.d
+install -o root -g root -m 644 "$HERE/caddy-override.conf" /etc/systemd/system/caddy.service.d/override.conf
 if [ ! -f /etc/mde/endpoint.env ]; then
   install -o root -g mde -m 640 "$HERE/endpoint.env.example" /etc/mde/endpoint.env
   echo "!! /etc/mde/endpoint.env is the EXAMPLE — fill in the real values, then: systemctl restart mde-endpoint"
@@ -50,7 +52,9 @@ systemctl daemon-reload
 systemctl enable --now caddy >/dev/null
 systemctl enable mde-endpoint >/dev/null
 systemctl restart mde-endpoint
-caddy validate --config /etc/caddy/Caddyfile >/dev/null && systemctl reload caddy || systemctl restart caddy
+caddy validate --config /etc/caddy/Caddyfile >/dev/null
+chown -R caddy:caddy /var/log/caddy   # validate (run as root) may have created the access log root-owned
+systemctl restart caddy
 sleep 1
 systemctl is-active mde-endpoint caddy
 curl -fsS http://127.0.0.1:8080/v1/health && echo
