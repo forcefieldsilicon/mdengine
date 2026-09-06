@@ -1,0 +1,7 @@
+[Unit]
+Description=MDEngine monthly statements (previous month, one text file per key)
+[Service]
+Type=oneshot
+User=mde
+EnvironmentFile=/etc/mde/endpoint.env
+ExecStart=/usr/bin/python3 /opt/mde/mde_admin.py statement --month prev

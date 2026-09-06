@@ -27,6 +27,10 @@ def fake_fetch(sid, secret):
     if sid not in FAKE_SESSIONS: raise urllib.error.HTTPError("https://api.stripe.com", 404, "no such session", {}, None)
     return FAKE_SESSIONS[sid]
 
+def lines(out):
+    """Human lines of a CLI run (its JSON log lines go to the same stdout)."""
+    return [l for l in out.splitlines() if l.strip() and not l.startswith("{")]
+
 class Server:
     def __init__(self, runners_open=False, launcher=None):
         self.dir = tempfile.mkdtemp(prefix="mde-test-")
@@ -219,6 +223,50 @@ class TestAdmin(Base):
         self.assertEqual(self.s.js("GET", "/v1/admin/stats")[0], 403)
         code, j = self.s.js("GET", "/v1/admin/stats", key="admintok"); self.assertEqual(code, 200); self.assertEqual(j["keys"], 0)
 
+
+    def test_statement_month(self):
+        full, kid = self.s.admin_key(10, email="stmt@example.test")                     # admin credit, this month
+        self.s.app.db.add_credit("cs_test_stmt", kid, 25.0, 45000, PRICE_STARTER)          # Stripe credit, this month
+        ts = E.now(); month = ts[:7]
+        # A billed job that finished this month, an unbilled pod_lost one, and one that finished last year (not listed).
+        self.s.app.db.x("insert into jobs(id,key_id,spec,state,created,started,finished,gpu,rate,billed_s,exitcode) values(?,?,?,?,?,?,?,?,?,?,?)",
+                        "MDJOB-20260901-STMT01", kid, json.dumps({"input": "in.lmp", "label": "Al slab"}), "done", ts, ts, ts, "rtx4090", 2.0, 900, 0)
+        self.s.app.db.x("insert into jobs(id,key_id,spec,state,created,finished,gpu,rate,error) values(?,?,?,?,?,?,?,?,?)",
+                        "MDJOB-20260901-STMT02", kid, json.dumps({"input": "in.lmp"}), "failed", ts, ts, "rtx4090", 2.0, "pod_lost")
+        self.s.app.db.x("insert into jobs(id,key_id,spec,state,created,started,finished,gpu,rate,billed_s,exitcode) values(?,?,?,?,?,?,?,?,?,?,?)",
+                        "MDJOB-20250101-OLD001", kid, json.dumps({"input": "in.lmp"}), "done", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", "2025-01-01T01:00:00Z", "rtx4090", 2.0, 3600, 0)
+        quiet_full, quiet_kid = self.s.admin_key(0, email="quiet@example.test")           # no activity: no file
+        out = os.path.join(self.s.dir, "stmts")
+        res = self.run_admin("statement", "--month", month, "--out", out)
+        path = os.path.join(out, kid + ".txt")
+        self.assertEqual(lines(res), [path]); self.assertFalse(os.path.exists(os.path.join(out, quiet_kid + ".txt")))
+        with open(path) as fh: txt = fh.read()
+        self.assertIn(f"statement {month}", txt); self.assertIn(f"key id     {kid}", txt); self.assertIn("stmt@example.test", txt)
+        self.assertIn("+$   25.00    12.50 GPU-h  Stripe session cs_test_stmt  (price_test_starter)", txt)
+        self.assertIn("+$   10.00     5.00 GPU-h  manual credit admin-", txt)
+        self.assertRegex(txt, r"MDJOB-20260901-STMT01\s+Al slab\s+done\s+-\s+rtx4090\s+900  \$0\.5000")
+        self.assertRegex(txt, r"MDJOB-20260901-STMT02\s+-\s+failed\s+pod_lost\s+rtx4090\s+0  \$0\.0000")
+        self.assertNotIn("MDJOB-20250101-OLD001", txt)
+        self.assertIn("credits added        $35.00", txt); self.assertIn("jobs finished        2 (billed 1, unbilled 1)", txt)
+        self.assertIn("GPU seconds billed   900", txt); self.assertIn("charges              $0.5000", txt)
+        self.assertIn(f"Opening balance ({month}-01)   $-2.00", txt)                       # last year's $2 job precedes this month's credits
+        self.assertRegex(txt, rf"Closing balance \({month}-\d\d\)   \$32\.50"); self.assertIn("Balance now                     $32.50", txt)
+        self.assertNotIn(full, txt)
+        # --key restricts; default --out lands next to the db; 'prev' is accepted; bad month exits.
+        res = self.run_admin("statement", "--month", month, "--key", kid)
+        default_path = os.path.join(os.path.dirname(self.s.cfg.db), "statements", month, kid + ".txt")
+        self.assertEqual(lines(res), [default_path]); self.assertTrue(os.path.exists(default_path))
+        self.assertIn("no activity", self.run_admin("statement", "--month", "2001-01", "--out", out))
+        self.assertIn("no activity", self.run_admin("statement", "--month", "prev", "--out", out))
+        with self.assertRaises(SystemExit): self.run_admin("statement", "--month", "2026-13", "--out", out)
+        with self.assertRaises(SystemExit): self.run_admin("statement", "--month", month, "--key", "nokey000", "--out", out)
+
+    def test_month_bounds(self):
+        self.assertEqual(A.month_bounds("2026-12"), ("2026-12", "2026-12-01T00:00:00Z", "2027-01-01T00:00:00Z"))
+        self.assertEqual(A.month_bounds("2026-02")[1:], ("2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"))
+        y, m = time.gmtime()[:2]; py, pm = (y - 1, 12) if m == 1 else (y, m - 1)
+        self.assertEqual(A.month_bounds("prev")[0], "%04d-%02d" % (py, pm))
+
 class TestJobFlowWhenOpen(Base):
     """The mock's job logic, behind the flag, end to end with a stand-in pod."""
     runners_open = True
@@ -318,18 +366,20 @@ class TestLauncherFlow(Base):
         self.assertTrue(self.s.app.join_bg()); self.assertEqual(self.fake.deleted, [pod]); self.assertEqual(self.fake.pods, {})
 
     def test_pod_lost_deletes_pod_unbilled(self):
+        """Final loss (attempt 2; attempt 1 relaunches, see test_pod_lost_relaunches_once_*)."""
         full, jid = self.started_job(); pod = self.s.app.db.job(jid)["pod_id"]; tok = self.pod_token(jid)
         self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": [], "elapsed_s": 0}, key=tok)
-        self.s.app.db.set_job(jid, last_hb=time.time() - 1000, started="2020-01-01T00:00:00Z")
+        self.s.app.db.set_job(jid, last_hb=time.time() - 1000, started="2020-01-01T00:00:00Z", attempt=2)
         self.s.app.watchdog_once(); self.assertTrue(self.s.app.join_bg())
         st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
         self.assertEqual((st["state"], st["error"], st["cost_usd"]), ("failed", "pod_lost", 0.0))
         self.assertEqual(self.fake.deleted, [pod]); self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 20.0)
 
     def test_launch_timeout_is_no_capacity_and_deletes_pod(self):
+        """Final launch timeout (attempt 2; attempt 1 relaunches, see test_launch_timeout_relaunches_once_*)."""
         full, jid = self.started_job(); pod = self.s.app.db.job(jid)["pod_id"]
         self.s.app.watchdog_once(); self.assertEqual(self.s.app.db.job(jid)["state"], "launching")         # fresh: untouched
-        self.s.app.db.set_job(jid, launched_at="2020-01-01T00:00:00Z")
+        self.s.app.db.set_job(jid, launched_at="2020-01-01T00:00:00Z", attempt=2)
         self.s.app.watchdog_once(); self.assertTrue(self.s.app.join_bg())
         st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
         self.assertEqual((st["state"], st["error"], st["cost_usd"]), ("failed", "no_capacity", 0.0))
@@ -366,6 +416,142 @@ class TestLauncherFlow(Base):
         for _ in range(3): self.s.app.reaper_once()
         self.assertEqual(self.s.app.reaper_fail[stuck], 3); self.assertIn('"ev":"reaper.stuck"', self._log.getvalue())
         self.fake.fail_delete.clear(); self.s.app.reaper_once(); self.assertNotIn(stuck, self.s.app.reaper_fail)
+
+    def lose_pod(self, jid):
+        """Simulate 3 missed heartbeats on a running job (clock pushed back so any billing would be visible)."""
+        self.s.app.db.set_job(jid, last_hb=time.time() - 1000, started="2020-01-01T00:00:00Z")
+        self.s.app.watchdog_once(); self.assertTrue(self.s.app.join_bg())
+
+    def test_pod_lost_relaunches_once_and_bills_attempt_2_only(self):
+        full, jid = self.started_job(); pod1 = self.s.app.db.job(jid)["pod_id"]; tok1 = self.pod_token(jid)
+        self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": ["old"], "elapsed_s": 5}, key=tok1)
+        self.assertEqual(self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]["attempt"], 1)
+        self.lose_pod(jid)
+        row = self.s.app.db.job(jid); pod2 = row["pod_id"]
+        self.assertEqual((row["attempt"], row["state"]), (2, "launching")); self.assertTrue(pod2 and pod2 != pod1)
+        self.assertIsNone(row["started"]); self.assertIsNone(row["last_hb"]); self.assertEqual((row["billed_s"], row["thermo"]), (0, "[]"))
+        self.assertEqual(self.fake.deleted, [pod1]); self.assertEqual(set(self.fake.pods), {pod2})           # never two live pods
+        self.assertEqual([c for c in self.fake.calls if c[0] == "create"], [("create", jid), ("create", jid)])
+        st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["attempt"], st["state"], st["billed_s"], st["cost_usd"], st["thermo_tail"], st["error"]), (2, "launching", 0, 0.0, [], None))
+        logs = self._log.getvalue(); self.assertIn('"ev":"job.relaunch"', logs); self.assertIn('"attempt":2', logs); self.assertIn('"reason":"pod_lost"', logs)
+        # The attempt-1 token is dead: a zombie pod can neither heartbeat nor finish the job.
+        self.assertEqual(self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": ["zombie"], "elapsed_s": 9}, key=tok1)[0], 401)
+        self.assertEqual(self.s.js("POST", f"/internal/jobs/{jid}/done", body={"exitcode": 0, "elapsed_s": 9}, key=tok1)[0], 401)
+        self.assertEqual(self.s.js("GET", f"/internal/jobs/{jid}", key=tok1)[0], 401)
+        # The new pod's token works; its first heartbeat starts the billing clock afresh.
+        tok2 = self.pod_token(jid); self.assertNotEqual(tok2, tok1); self.assertEqual(self.s.app.db.job(jid)["token_hash"], E.sha256(tok2))
+        self.assertNotIn(tok2, self._log.getvalue())
+        code, spec = self.s.js("GET", f"/internal/jobs/{jid}", key=tok2); self.assertEqual(code, 200); self.assertEqual(spec["wall_limit_s"], 3600)
+        self.assertEqual(self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": ["new"], "elapsed_s": 1}, key=tok2)[0], 200)
+        st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["state"], st["thermo_tail"]), ("running", ["new"])); self.assertLess(st["billed_s"], 5)
+        self.assertGreater(E.parse_ts(st["started"]), time.time() - 5)                                          # not 2020
+        # A stale pod1 that survived its delete is reaped as superseded (never as the job's live pod).
+        self.fake.add_pod("mde-" + jid, pod_id=pod1); self.fake.deleted.clear()
+        self.assertEqual(self.s.app.reaper_once(), 1); self.assertEqual(self.fake.deleted, [pod1]); self.assertIn('"reason":"superseded"', self._log.getvalue())
+        self.assertIn(pod2, self.fake.pods)
+        # Finish attempt 2: 100 s of GPU time billed, nothing from attempt 1.
+        self.s.app.db.set_job(jid, started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 100)))
+        self.s.req("PUT", spec["results_put_url"], raw=b"out2")
+        code, j = self.s.js("POST", f"/internal/jobs/{jid}/done", body={"exitcode": 0, "elapsed_s": 100, "results_bytes": 4}, key=tok2)
+        self.assertEqual((code, j["state"]), (200, "done")); self.assertTrue(self.s.app.join_bg())
+        st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["state"], st["attempt"], st["billed_s"], st["cost_usd"]), ("done", 2, 100, round(100 * 2 / 3600, 4)))
+        self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], round(20 - 100 * 2 / 3600, 6))
+        self.assertEqual(self.fake.pods, {}); self.assertIn(pod2, self.fake.deleted)
+
+    def test_second_pod_loss_fails_unbilled(self):
+        full, jid = self.started_job(); pod1 = self.s.app.db.job(jid)["pod_id"]
+        self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": [], "elapsed_s": 0}, key=self.pod_token(jid))
+        self.lose_pod(jid); pod2 = self.s.app.db.job(jid)["pod_id"]; tok2 = self.pod_token(jid)
+        self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": ["x"], "elapsed_s": 1}, key=tok2)
+        self.assertEqual(self.s.app.db.job(jid)["state"], "running")
+        self.lose_pod(jid)                                                                                     # attempt 2 lost too
+        row = self.s.app.db.job(jid); st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["state"], st["error"], st["attempt"], st["cost_usd"], st["billed_s"]), ("failed", "pod_lost", 2, 0.0, 0))
+        self.assertIsNone(row["token_hash"]); self.assertEqual(self.fake.deleted, [pod1, pod2]); self.assertEqual(self.fake.pods, {})
+        self.assertEqual(self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={}, key=tok2)[0], 401)
+        self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 20.0)
+        logs = self._log.getvalue(); self.assertEqual(logs.count('"ev":"job.relaunch"'), 1); self.assertIn('"ev":"job.pod_lost"', logs)
+        self.assertEqual([c for c in self.fake.calls if c[0] == "create"], [("create", jid)] * 2)               # no third attempt
+
+    def test_launch_timeout_relaunches_once_then_no_capacity(self):
+        full, jid = self.started_job(); pod1 = self.s.app.db.job(jid)["pod_id"]; tok1 = self.pod_token(jid)
+        self.s.app.db.set_job(jid, launched_at="2020-01-01T00:00:00Z")
+        self.s.app.watchdog_once(); self.assertTrue(self.s.app.join_bg())
+        row = self.s.app.db.job(jid); pod2 = row["pod_id"]
+        self.assertEqual((row["attempt"], row["state"]), (2, "launching")); self.assertTrue(pod2 and pod2 != pod1)
+        self.assertGreater(E.parse_ts(row["launched_at"]), time.time() - 5)                                    # fresh timeout clock
+        self.assertEqual(self.fake.deleted, [pod1]); self.assertEqual(set(self.fake.pods), {pod2})
+        self.assertIn('"reason":"launch_timeout"', self._log.getvalue())
+        self.assertEqual(self.s.js("GET", f"/internal/jobs/{jid}", key=tok1)[0], 401)
+        self.assertEqual(self.s.js("GET", f"/internal/jobs/{jid}", key=self.pod_token(jid))[0], 200)
+        self.s.app.watchdog_once(); self.assertEqual(self.s.app.db.job(jid)["state"], "launching")            # not yet timed out
+        self.s.app.db.set_job(jid, launched_at="2020-01-01T00:00:00Z")
+        self.s.app.watchdog_once(); self.assertTrue(self.s.app.join_bg())
+        st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["state"], st["error"], st["attempt"], st["cost_usd"]), ("failed", "no_capacity", 2, 0.0))
+        self.assertEqual(self.fake.deleted, [pod1, pod2]); self.assertEqual(self.fake.pods, {}); self.assertIsNone(self.s.app.db.job(jid)["token_hash"])
+        self.assertIn('"ev":"job.launch_timeout"', self._log.getvalue())
+        self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 20.0)
+
+    def test_relaunch_with_no_capacity_fails_unbilled(self):
+        full, jid = self.started_job(); pod1 = self.s.app.db.job(jid)["pod_id"]
+        self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": [], "elapsed_s": 0}, key=self.pod_token(jid))
+        self.fake.fail_create = True; self.lose_pod(jid)
+        st = self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]
+        self.assertEqual((st["state"], st["error"], st["attempt"], st["cost_usd"], st["pod_id"]), ("failed", "no_capacity", 2, 0.0, None))
+        self.assertEqual(self.fake.deleted, [pod1]); self.assertEqual(self.fake.pods, {})
+        self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 20.0)
+
+class TestBlobRetention(Base):
+    runners_open = True; fake_launcher = True
+    def blob(self, name, data=b"x", age_s=None):
+        p = self.s.app.blob_path(name)
+        with open(p, "wb") as fh: fh.write(data)
+        if age_s: os.utime(p, (time.time() - age_s, time.time() - age_s))
+        return p
+
+    def test_purge_deletes_only_old_terminal_jobs_and_old_strays(self):
+        full, kid = self.s.admin_key(20); ids = []
+        for _ in range(3):
+            jid = self.s.js("POST", "/v1/jobs", body={"input": "in.lmp"}, key=full)[1]["id"]; ids.append(jid)
+            self.s.req("PUT", self.s.app.blob_url(f"{jid}.in.tar.gz")[0], raw=b"deck-" + jid.encode())
+            self.blob(f"{jid}.out.tar.gz", b"results-" + jid.encode())
+        old, fresh, live = ids
+        days = self.s.app.cfg.blob_retention_days; self.assertEqual(days, 30.0)
+        self.s.app.db.set_job(old, state="done", finished=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - (days + 1) * 86400)))
+        self.s.app.db.set_job(fresh, state="done", finished=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - (days - 1) * 86400)))
+        # `live` stays in state uploaded (no finished): its blobs are never touched however old the files are.
+        for suffix in (".in.tar.gz", ".out.tar.gz"): os.utime(self.s.app.blob_path(live + suffix), (0, 0))
+        self.blob(f"{old}.out.tar.gz.part", b"partial")
+        stray_old = self.blob("MDJOB-20200101-GONE01.out.tar.gz", b"orphan", age_s=(days + 2) * 86400)
+        stray_new = self.blob("MDJOB-20260901-GONE02.in.tar.gz", b"orphan", age_s=3600)
+        other = self.blob("notes.txt", b"not ours", age_s=(days + 2) * 86400)                                # not a job blob: ignored
+        n = self.s.app.purge_blobs_once()
+        self.assertEqual(n, 4)                                                                                # old .in, .out, .part + stray_old
+        for suffix in (".in.tar.gz", ".out.tar.gz"):
+            self.assertFalse(os.path.exists(self.s.app.blob_path(old + suffix)))
+            self.assertTrue(os.path.exists(self.s.app.blob_path(fresh + suffix))); self.assertTrue(os.path.exists(self.s.app.blob_path(live + suffix)))
+        self.assertFalse(os.path.exists(self.s.app.blob_path(f"{old}.out.tar.gz.part")))
+        self.assertFalse(os.path.exists(stray_old)); self.assertTrue(os.path.exists(stray_new)); self.assertTrue(os.path.exists(other))
+        logs = [json.loads(l) for l in self._log.getvalue().splitlines() if '"ev":"blob.purged"' in l]
+        self.assertEqual(len(logs), 4)
+        by_name = {l["name"]: l for l in logs}
+        self.assertEqual(by_name[f"{old}.out.tar.gz"]["job"], old); self.assertEqual(by_name[f"{old}.out.tar.gz"]["bytes"], len(b"results-" + old.encode()))
+        self.assertEqual(by_name[f"{old}.out.tar.gz"]["reason"], "retention"); self.assertEqual(by_name["MDJOB-20200101-GONE01.out.tar.gz"]["reason"], "stray")
+        self.assertGreater(self.s.app.last_blob_purge, 0)
+        # Second pass is a no-op; fresh job's results still downloadable; old job's results answer 410.
+        self.assertEqual(self.s.app.purge_blobs_once(), 0)
+        self.assertEqual(self.s.js("GET", f"/v1/jobs/{fresh}/results", key=full)[0], 200)
+        code, j = self.s.js("GET", f"/v1/jobs/{old}/results", key=full); self.assertEqual(code, 410); self.assertEqual(j["error"], "results expired")
+        self.assertEqual(self.s.js("GET", f"/v1/jobs/{old}", key=full)[1]["state"], "done")                 # metadata kept
+
+    def test_retention_config(self):
+        self.assertEqual(E.Config({"MDE_BLOB_RETENTION_DAYS": "7", "MDE_DB": "/nonexistent/x"}).blob_retention_days, 7.0)
+        self.assertEqual(E.Config({"MDE_DB": "/nonexistent/x"}).blob_retention_days, 30.0)
+        self.assertEqual(E.BLOB_PURGE_INTERVAL_S, 3600)
 
 class TestRunPodLauncher(unittest.TestCase):
     """Request shaping against a monkeypatched transport; no network."""
@@ -460,6 +646,11 @@ class TestUnits(unittest.TestCase):
         db = E.DB(path); cols = {r["name"] for r in db.q("pragma table_info(jobs)")}
         self.assertIn("pod_id", cols); self.assertIn("launched_at", cols)
         db2 = E.DB(path); db.c.close(); db2.c.close(); shutil.rmtree(d, ignore_errors=True)      # second open: duplicate column ignored
+
+    def test_parse_ts_is_utc(self):
+        self.assertEqual(E.parse_ts("2020-01-01T00:00:00Z"), 1577836800); self.assertIsNone(E.parse_ts(None))
+        self.assertEqual(E.parse_ts("2026-07-01T12:00:00Z"), 1782907200)                                    # mid-DST date, still exact
+        t = int(time.time()); self.assertEqual(E.parse_ts(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))), t)
 
     def test_signature_roundtrip(self):
         p = b'{"a":1}'; h = E.stripe_sign(p, "s")

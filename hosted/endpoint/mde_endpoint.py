@@ -11,14 +11,16 @@ Evolved from hosted/mock/mock_endpoint.py: same routes and JSON shapes for the c
   * POST /v1/stripe/webhook                checkout.session.completed backstop (same handler)
   * Job submission gated by MDE_RUNNERS_OPEN=1 (auth + balance still checked while closed).
   * RunPod pod launcher (mde_launcher.py) when RUNPOD_API_KEY is set: one pod per job, deleted at every
-    terminal state; watchdog handles launch timeout / pod_lost; reaper enforces "a pod exists only while
-    a job is launching/running" (CONTRACT.md, GJOB-099). Without the key `start` writes launch.env (dev).
+    terminal state; watchdog relaunches once (attempt 2) on launch timeout / pod_lost, then fails the job
+    unbilled; reaper enforces "a pod exists only while a job is launching/running" (CONTRACT.md, GJOB-099).
+    Without the key `start` writes launch.env (dev).
+  * Blob retention: deck/result tarballs are deleted MDE_BLOB_RETENTION_DAYS (30) after the job finished.
 
 Runs behind Caddy (TLS) on 127.0.0.1:8080 under systemd; see deploy/ and README.md.
 
   python3 mde_endpoint.py --env-file /etc/mde/endpoint.env
 """
-import argparse, hashlib, hmac, json, os, secrets, sqlite3, sys, threading, time, urllib.error, urllib.parse, urllib.request
+import argparse, calendar, hashlib, hmac, json, os, secrets, sqlite3, sys, threading, time, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -35,12 +37,14 @@ HEARTBEAT_LOST_S = 120              # 30 s heartbeat, 3 missed -> pod_lost
 PENDING_KEY_TTL_S = 7 * 86400       # unshown keys from webhook-first purchases are purged after this
 STRIPE_TOLERANCE_S = 300
 REAPER_GRACE_S = 1200               # reaper kills a pod older than its job's wall_limit_s + this (CONTRACT: +20 min)
+MAX_ATTEMPTS = 2                    # one automatic relaunch on pod loss / launch timeout (CONTRACT "State machine")
+BLOB_PURGE_INTERVAL_S = 3600        # watchdog sweeps expired deck/result tarballs this often
 POD_PREFIX = "mde-"
 
 # ----------------------------------------------------------------------------- helpers
 
 def now(): return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-def parse_ts(s): return time.mktime(time.strptime(s, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone if s else None
+def parse_ts(s): return calendar.timegm(time.strptime(s, "%Y-%m-%dT%H:%M:%SZ")) if s else None   # UTC in, UTC out (mktime-timezone was DST-wrong)
 def job_id(): return "MDJOB-%s-%s" % (time.strftime("%Y%m%d", time.gmtime()), secrets.token_hex(3).upper())
 def sha256(s): return hashlib.sha256(s.encode() if isinstance(s, str) else s).hexdigest()
 
@@ -98,6 +102,8 @@ class Config:
         self.gpu_ladder = parse_ladder(e.get("MDE_GPU_LADDER", ""))
         self.launch_timeout_s = int(e.get("MDE_LAUNCH_TIMEOUT_S", "600") or 600)
         self.reaper_interval_s = int(e.get("MDE_REAPER_INTERVAL_S", "300") or 300)
+        # Published promise: decks/trajectories are deleted 30 days after the run.
+        self.blob_retention_days = float(e.get("MDE_BLOB_RETENTION_DAYS", "30") or 30)
 
 # ----------------------------------------------------------------------------- storage
 
@@ -231,6 +237,7 @@ class App:
         self.launcher = RunPodLauncher(cfg, public_url=self.public_url) if cfg.runpod_api_key else None   # tests inject FakeLauncher
         self.reaper_fail = {}          # pod_id -> consecutive reaper delete failures (in memory; 3 = reaper.stuck)
         self.last_reap = 0.0
+        self.last_blob_purge = 0.0
         self._bg = []; self._bg_lock = threading.Lock()
 
     # -- background work (pod create/delete never blocks an HTTP response); join_bg() is for tests
@@ -343,14 +350,59 @@ class App:
         self.release_pod(j["id"], cur["pod_id"], fields.get("error") or fields.get("state"))
         return cur
 
-    # -- watchdog: lost heartbeats -> pod_lost; launching too long -> no_capacity (neither is billed)
+    # -- watchdog: lost heartbeats -> relaunch once, then pod_lost; launching too long -> relaunch once, then no_capacity
     def watchdog_once(self):
         cutoff = time.time() - HEARTBEAT_LOST_S
         for j in self.db.q("select * from jobs where state='running' and last_hb is not null and last_hb < ?", cutoff):
+            if self.relaunch(j, "pod_lost"): continue
             self.finish_job(j, "job.pod_lost", state="failed", finished=now(), error="pod_lost", token_hash=None)
         lcut = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - self.cfg.launch_timeout_s))
         for j in self.db.q("select * from jobs where state='launching' and last_hb is null and launched_at is not null and launched_at < ?", lcut):
+            if self.relaunch(j, "launch_timeout"): continue
             self.finish_job(j, "job.launch_timeout", state="failed", finished=now(), error="no_capacity", token_hash=None)
+
+    def relaunch(self, j, reason):
+        """attempt 1 -> 2 (CONTRACT: "relaunch once"): kill the old pod, mint a fresh token so a zombie pod cannot
+        heartbeat or POST done, requeue with attempt 1's clock wiped (nothing from attempt 1 is billed), and walk the
+        same launch path `start` uses. Returns False when the job is not eligible (no launcher, or already attempt 2)."""
+        if not self.launcher or (j["attempt"] or 1) >= MAX_ATTEMPTS: return False
+        old_pod = j["pod_id"]; attempt = (j["attempt"] or 1) + 1
+        tok = "jt_" + secrets.token_hex(16)                          # stored hashed, handed to the new pod only
+        self.db.set_job(j["id"], token_hash=sha256(tok), attempt=attempt, state="queued", pod_id=None, last_hb=None,
+                        launched_at=None, started=None, billed_s=0, thermo="[]")
+        log("job.relaunch", job=j["id"], key_id=j["key_id"], attempt=attempt, reason=reason, old_pod_id=old_pod)
+        self.release_pod(j["id"], old_pod, "relaunch:" + reason)     # background; never adds a second live pod
+        wall = int(json.loads(j["spec"]).get("wall_limit_s") or 86400)
+        self.spawn(self.launch_job, j["id"], tok, wall, j["gpu"])
+        return True
+
+    # -- blob retention (published promise: decks/trajectories deleted 30 days after the run)
+    def purge_blobs_once(self):
+        """Delete .in/.out tarballs of jobs terminal for longer than MDE_BLOB_RETENTION_DAYS, plus stray files whose
+        job row is gone and whose mtime is older than the retention. Returns the number of files removed."""
+        keep_s = self.cfg.blob_retention_days * 86400; cutoff_ts = time.time() - keep_s
+        cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff_ts)); n = 0
+        for j in self.db.q("select id, finished from jobs where state in ('done','failed','cancelled') and finished is not null and finished < ?", cutoff):
+            for suffix in (".in.tar.gz", ".out.tar.gz", ".in.tar.gz.part", ".out.tar.gz.part"):
+                n += self.unlink_blob(j["id"] + suffix, job=j["id"], reason="retention", finished=j["finished"])
+        try: names = os.listdir(self.cfg.blobs)
+        except OSError as e: log("blob.purge_error", error=repr(e)); return n
+        for name in names:
+            jid = name.split(".")[0]
+            if not jid.startswith("MDJOB-") or self.db.job(jid): continue
+            try: mtime = os.stat(self.blob_path(name)).st_mtime
+            except OSError: continue
+            if mtime < cutoff_ts: n += self.unlink_blob(name, job=jid, reason="stray")
+        self.last_blob_purge = time.time()
+        if n: log("blob.purge_done", files=n)
+        return n
+
+    def unlink_blob(self, name, **kw):
+        f = self.blob_path(name)
+        try: size = os.path.getsize(f); os.remove(f)
+        except FileNotFoundError: return 0
+        except OSError as e: log("blob.purge_error", name=name, error=repr(e)); return 0
+        log("blob.purged", name=name, bytes=size, **kw); return 1
 
     # -- reaper (CONTRACT "Pod lifecycle", GJOB-099): a pod exists only while a job is launching/running
     def reaper_once(self):
@@ -365,6 +417,7 @@ class App:
             reason = None
             if not j: reason = "no_job"
             elif j["state"] in TERMINAL: reason = "job_terminal"
+            elif j["pod_id"] and j["pod_id"] != pid: reason = "superseded"    # attempt-1 pod that survived its relaunch delete
             else:
                 age = pod_age_s(p); wall = int((json.loads(j["spec"]).get("wall_limit_s")) or 86400)
                 if age is not None and age > wall + REAPER_GRACE_S: reason = "overage"
@@ -385,6 +438,9 @@ class App:
             if self.launcher and time.time() - self.last_reap >= self.cfg.reaper_interval_s:
                 try: self.reaper_once()
                 except Exception as e: log("reaper.error", error=repr(e))
+            if time.time() - self.last_blob_purge >= BLOB_PURGE_INTERVAL_S:
+                try: self.purge_blobs_once()
+                except Exception as e: log("blob.purge_error", error=repr(e))
 
 # ----------------------------------------------------------------------------- HTTP
 
@@ -468,6 +524,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts[4] == "results":
                 if j["state"] not in ("done", "failed"): return self.send(409, {"error": "not finished"})
                 f = self.app.blob_path(f"{j['id']}.out.tar.gz"); sz = os.path.getsize(f) if os.path.exists(f) else 0
+                if not sz and j["finished"] and parse_ts(j["finished"]) < time.time() - self.app.cfg.blob_retention_days * 86400:
+                    return self.send(410, {"error": "results expired", "retention_days": self.app.cfg.blob_retention_days})
                 url, exp = self.app.blob_url(f"{j['id']}.out.tar.gz")
                 return self.send(200, {"download_url": url, "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp)), "bytes": sz})
         self.send(404, {"error": "no route"})

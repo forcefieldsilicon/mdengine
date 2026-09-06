@@ -45,6 +45,7 @@ python3 hosted/endpoint/test_endpoint.py -v
 | `MDE_MIN_CUDA` | `gpu.minCudaVersion` on the pod request, default `12.4` (the ADA89 image is built against CUDA 12.4). |
 | `MDE_LAUNCH_TIMEOUT_S` | a job still `launching` with no heartbeat after this many seconds -> pod deleted, `failed:no_capacity` (unbilled). Default `600`. |
 | `MDE_REAPER_INTERVAL_S` | how often the reaper lists the account's pods, default `300`. It also runs once at boot. |
+| `MDE_BLOB_RETENTION_DAYS` | deck and results tarballs are deleted this many days after the job reached a terminal state; default `30` (the published promise). |
 
 Logs are one JSON object per line on stdout (`journalctl -u mde-endpoint -f`). Full API keys, job tokens and
 Stripe secrets never appear in logs or in the database (keys are stored as sha256; `key_id` = first 8 hex).
@@ -87,11 +88,16 @@ thread so the HTTP response never waits on RunPod:
    `DELETE /v2/pods/{pod_id}` in a background thread (`pod.deleted` / `pod.delete_failed`). 204 and 404 both count as
    deleted; 429/5xx retry 3x with backoff. A cancel that lands while the create call is in flight deletes the pod the
    moment the create returns.
-4. Watchdog (every 30 s): `running` with no heartbeat for 120 s -> `failed:pod_lost` + pod deleted;
-   `launching` past `MDE_LAUNCH_TIMEOUT_S` with no heartbeat -> `job.launch_timeout`, `failed:no_capacity` + pod deleted.
+4. Watchdog (every 30 s): `running` with no heartbeat for 120 s, or `launching` past `MDE_LAUNCH_TIMEOUT_S` with no
+   heartbeat, on **attempt 1** -> `job.relaunch` (attempt 2): the old pod is deleted, a fresh job token is minted (the
+   attempt-1 token is dead, so a zombie pod gets 401 on heartbeat/done), `started`/`last_hb`/`thermo` are wiped and the
+   job goes back through `queued` -> the same launch path as `start`. Nothing from attempt 1 is billed; billing runs
+   from attempt 2's first heartbeat. The same loss on attempt 2 -> `failed:pod_lost` / `job.launch_timeout` ->
+   `failed:no_capacity`, pod deleted, unbilled. `GET /v1/jobs/{id}` reports `attempt`.
 5. Reaper (`reaper_once`, every `MDE_REAPER_INTERVAL_S` and once at boot; CONTRACT "Pod lifecycle", GJOB-099): lists
    every pod on the account and deletes any `mde-*` pod whose job is terminal, missing (`pod_id` and name suffix both
-   unknown), or whose age exceeds the job's `wall_limit_s` + 20 min (`reaper.deleted` with `reason`). Pods not named
+   unknown), superseded by a relaunch (job's `pod_id` is a different pod), or whose age exceeds the job's `wall_limit_s`
+   + 20 min (`reaper.deleted` with `reason`). Pods not named
    `mde-*` are never touched. Consecutive delete failures per pod are counted in memory; the third logs `reaper.stuck`
    (page on that). Job rows keep `pod_id` after deletion for the audit trail; `GET /v1/jobs/{id}` echoes it.
 
@@ -106,13 +112,29 @@ ssh root@HOST  'vi /etc/mde/endpoint.env && systemctl restart mde-endpoint'   # 
 ssh root@HOST   mde-admin stats
 ```
 `bootstrap.sh` is idempotent: apt update, unattended-upgrades, ufw 22/80/443, user `mde`, Caddy from its apt repo,
-`/opt/mde` (code), `/var/lib/mde` (state, owned by `mde`), `/etc/mde` (env, root:mde 0640), both services enabled.
+`/opt/mde` (code), `/var/lib/mde` (state, owned by `mde`), `/etc/mde` (env, root:mde 0640), the two services plus the
+`mde-backup` (hourly) and `mde-statements` (monthly) timers enabled.
 It copies no secrets; an example env file is placed only if none exists. DNS for the hostname in `deploy/Caddyfile`
 must point at the box before Caddy can obtain its certificate. The unit runs with `ProtectSystem=strict`; the only
 writable path is `/var/lib/mde`.
 
 Back up `/var/lib/mde/mde.sqlite` (it is the ledger): `sqlite3 /var/lib/mde/mde.sqlite ".backup /root/mde-$(date +%F).sqlite"`
 or continuous replication with litestream.
+
+### Blob retention
+Once an hour the watchdog deletes `<job>.in.tar.gz` / `<job>.out.tar.gz` (and stray `.part` uploads) for jobs whose
+terminal `finished` is older than `MDE_BLOB_RETENTION_DAYS` (30), logging `blob.purged` with the job id and bytes, and
+removes blobs whose job row no longer exists once their mtime passes the same age. `GET /v1/jobs/{id}/results` answers
+410 `results expired` after that. The sqlite job rows (metadata, billing) are kept.
+
+### Monthly statements
+`mde-admin statement --month YYYY-MM|prev [--key KEYID] [--out DIR]` writes one plain-text statement per key that had
+activity that month (credits with their Stripe session ids, jobs listed in the month they finished with id/label/state/
+gpu/billed seconds/cost, month totals, opening and closing balance) to `DIR` (default
+`/var/lib/mde/statements/YYYY-MM/<key_id>.txt`) and prints the paths. `deploy/mde-statements.timer` runs
+`statement --month prev` on the 1st at 06:00 UTC (`Persistent=true`, so a missed run catches up at boot).
+**Emailing statements is manual**: there is no mail infrastructure on the box; pull the files and send them
+(`rsync root@HOST:/var/lib/mde/statements/ ./statements/`). Statements contain the buyer's email — treat the directory like the db.
 
 ## Operations
 - **Open the runners**: set `MDE_RUNNERS_OPEN=1` in the env file, `systemctl restart mde-endpoint`, confirm
@@ -125,7 +147,8 @@ or continuous replication with litestream.
 - **Rotate the Stripe secret key**: replace `STRIPE_SECRET_KEY`, restart. Only session reads are needed
   (a restricted key with `checkout_sessions: read` works).
 - **Issue a key by hand**: `mde-admin key new --email E --credit 25 [--label L]` (prints the key once);
-  top up: `mde-admin credit add --key KEYID --usd 50`; inspect: `mde-admin key list`, `mde-admin ledger [--key KEYID]`, `mde-admin stats`.
+  top up: `mde-admin credit add --key KEYID --usd 50`; inspect: `mde-admin key list`, `mde-admin ledger [--key KEYID]`, `mde-admin stats`;
+  statements: `mde-admin statement --month 2026-09 [--key KEYID]` (see "Monthly statements").
 - **Replace a lost key**: create a new key with `key new --credit 0`, then `credit add` the old balance and note the
   old key id in `--label`. Old keys cannot be recovered from their hash.
 - **Pod stand-in without a launcher**: with `RUNPOD_API_KEY` unset, `start` writes `/var/lib/mde/launch.env`
@@ -136,7 +159,7 @@ or continuous replication with litestream.
   `reaper.stuck` means three passes failed to delete one pod: delete it in the RunPod console and look at the error text.
 
 ## Not in this skeleton (tracked in `../CONTRACT.md`)
-Presigned object-storage (R2) URLs — blobs live on the box behind signed URLs; automatic relaunch on `pod_lost`
-(attempt 2) — the watchdog marks the job `failed:pod_lost`, deletes the pod, and does not bill it. The GPU/cloud
-fallback ladder is walked at create time (a rung that refuses moves to the next one immediately); a pod that is
-accepted but never heartbeats is not moved to the next rung, it times out to `failed:no_capacity`.
+Presigned object-storage (R2) URLs — blobs live on the box behind signed URLs. The GPU/cloud fallback ladder is
+walked at create time (a rung that refuses moves to the next one immediately); a pod that is accepted but never
+heartbeats is not moved to the next rung: it is relaunched once through the whole ladder (attempt 2), then times out
+to `failed:no_capacity`.

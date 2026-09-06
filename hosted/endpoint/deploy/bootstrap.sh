@@ -42,6 +42,8 @@ install -o root -g root -m 644 "$HERE/mde-endpoint.service" /etc/systemd/system/
 install -o root -g root -m 755 "$HERE/mde-backup.sh" /opt/mde/mde-backup.sh
 install -o root -g root -m 644 "$HERE/mde-backup.service" /etc/systemd/system/mde-backup.service
 install -o root -g root -m 644 "$HERE/mde-backup.timer" /etc/systemd/system/mde-backup.timer
+install -o root -g root -m 644 "$HERE/mde-statements.service" /etc/systemd/system/mde-statements.service
+install -o root -g root -m 644 "$HERE/mde-statements.timer" /etc/systemd/system/mde-statements.timer
 install -o root -g root -m 644 "$HERE/Caddyfile" /etc/caddy/Caddyfile
 install -d -m 755 /etc/systemd/system/caddy.service.d
 install -o root -g root -m 644 "$HERE/caddy-override.conf" /etc/systemd/system/caddy.service.d/override.conf
@@ -56,6 +58,7 @@ systemctl daemon-reload
 systemctl enable --now caddy >/dev/null
 systemctl enable mde-endpoint >/dev/null
 systemctl enable --now mde-backup.timer >/dev/null
+systemctl enable --now mde-statements.timer >/dev/null
 systemctl restart mde-endpoint
 caddy validate --config /etc/caddy/Caddyfile >/dev/null
 chown -R caddy:caddy /var/log/caddy   # validate (run as root) may have created the access log root-owned

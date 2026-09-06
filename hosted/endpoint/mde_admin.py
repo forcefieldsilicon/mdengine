@@ -7,10 +7,11 @@
   mde_admin.py ledger [--key KEYID]
   mde_admin.py stats
   mde_admin.py pending [--reveal SESSION_ID]                 # keys bought via webhook, not yet shown
+  mde_admin.py statement --month YYYY-MM|prev [--key KEYID] [--out DIR]   # plain-text monthly statements, one per key
 
 DB path: --db, else $MDE_DB, else the value in --env-file / /etc/mde/endpoint.env.
 """
-import argparse, os, secrets, sys
+import argparse, calendar, os, secrets, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mde_endpoint as E
 
@@ -81,6 +82,72 @@ def cmd_pending(a):
     if not rows: print("no pending keys"); return
     for p in rows: print(f"{p['created']}  {p['key_id']}  {p['email'] or '-':<32} {p['session_id']}")
 
+
+# ----------------------------------------------------------------------------- statements
+
+def month_bounds(month):
+    """'YYYY-MM' or 'prev' -> (label, start_iso, end_iso); end is the first instant of the next month (exclusive)."""
+    if month == "prev":
+        y, m = time.gmtime()[:2]; y, m = (y - 1, 12) if m == 1 else (y, m - 1); month = "%04d-%02d" % (y, m)
+    try: y, m = (int(x) for x in month.split("-")); assert 1 <= m <= 12 and 2000 <= y <= 2999
+    except (ValueError, AssertionError): sys.exit("--month must be YYYY-MM or prev")
+    ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+    return month, "%04d-%02d-01T00:00:00Z" % (y, m), "%04d-%02d-01T00:00:00Z" % (ny, nm)
+
+def balance_before(db, key_id, iso):
+    """Balance from credits created before `iso` minus cost of jobs that reached a terminal state before it."""
+    cred = float(db.one("select coalesce(sum(usd),0) s from credits where key_id=? and created<?", key_id, iso)["s"])
+    billed = sum(E.job_cost(j) for j in db.q("select * from jobs where key_id=? and state in ('done','failed','cancelled') and finished<?", key_id, iso))
+    return round(cred - billed, 6)
+
+def statement_text(db, cfg, k, month, start, end):
+    """One key's statement for the month, or None when the key had no credits and no finished jobs that month.
+    A job is listed in the month it reached a terminal state (that is when its cost is final)."""
+    credits = db.q("select * from credits where key_id=? and created>=? and created<? order by created", k["key_id"], start, end)
+    jobs = db.q("select * from jobs where key_id=? and state in ('done','failed','cancelled') and finished>=? and finished<? order by finished", k["key_id"], start, end)
+    if not credits and not jobs: return None
+    y, m = (int(x) for x in month.split("-")); last_day = calendar.monthrange(y, m)[1]
+    L = [f"{cfg.brand} -- statement {month}", f"key id     {k['key_id']}", f"email      {k['email'] or '-'}",
+         f"generated  {E.now()}", f"rates      " + ", ".join(f"{g} ${r:.2f}/GPU-h" for g, r in sorted(cfg.rates.items())), "",
+         f"Opening balance ({month}-01)   ${balance_before(db, k['key_id'], start):.2f}", "", "Credits"]
+    if credits:
+        for c in credits:
+            src = "Stripe session " + c["session_id"] if not c["session_id"].startswith("admin-") else "manual credit " + c["session_id"]
+            L.append(f"  {c['created']}  +${c['usd']:>8.2f}  {c['gpu_s']/3600:>7.2f} GPU-h  {src}" + (f"  ({c['price_id']})" if c["price_id"] and c["price_id"] != "admin" else ""))
+    else: L.append("  (none)")
+    L += ["", "Jobs (listed in the month they finished)", f"  {'finished':<21}{'id':<23}{'label':<24}{'state':<10}{'error':<12}{'gpu':<9}{'billed_s':>9}  cost"]
+    tot_s = tot_cost = 0.0; billed_n = 0
+    for j in jobs:
+        label = (E.json.loads(j["spec"]).get("label") or "-")[:22]; cost = E.job_cost(j); sec = E.billed_seconds(j)
+        if cost: billed_n += 1
+        tot_s += sec if cost else 0; tot_cost += cost
+        L.append(f"  {j['finished']:<21}{j['id']:<23}{label:<24}{j['state']:<10}{(j['error'] or '-'):<12}{(j['gpu'] or '-'):<9}{sec:>9d}  ${cost:.4f}")
+    if not jobs: L.append("  (none)")
+    L += ["", f"Totals {month}", f"  credits added        ${sum(c['usd'] for c in credits):.2f}",
+          f"  jobs finished        {len(jobs)} (billed {billed_n}, unbilled {len(jobs) - billed_n})",
+          f"  GPU seconds billed   {int(tot_s)}", f"  charges              ${tot_cost:.4f}", "",
+          f"Closing balance ({month}-{last_day:02d})   ${balance_before(db, k['key_id'], end):.2f}",
+          f"Balance now                     ${db.balance(k['key_id']):.2f}", "",
+          "Credits never expire. Questions: reply to your Stripe receipt and quote the key id above."]
+    return "\n".join(L) + "\n"
+
+def cmd_statement(a):
+    db, cfg = open_db(a)
+    month, start, end = month_bounds(a.month)
+    out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.db or os.environ.get("MDE_DB"))), "statements", month)
+    keys = [db.key_by_id(a.key)] if a.key else db.q("select * from keys order by created")
+    if a.key and not keys[0]: sys.exit(f"no key {a.key}")
+    written = []
+    for k in keys:
+        text = statement_text(db, cfg, k, month, start, end)
+        if text is None: continue
+        os.makedirs(out, mode=0o750, exist_ok=True)
+        path = os.path.join(out, f"{k['key_id']}.txt")
+        with open(path, "w", opener=lambda f, fl: os.open(f, fl, 0o640)) as fh: fh.write(text)
+        written.append(path); print(path)
+    if not written: print(f"no activity in {month}")
+    E.log("admin.statement", month=month, files=len(written), out=out)
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--db"); ap.add_argument("--env-file", default=os.environ.get("MDE_ENV_FILE", "/etc/mde/endpoint.env"))
@@ -93,6 +160,9 @@ def main(argv=None):
     l = sub.add_parser("ledger"); l.add_argument("--key"); l.set_defaults(f=cmd_ledger)
     sub.add_parser("stats").set_defaults(f=cmd_stats)
     p = sub.add_parser("pending"); p.add_argument("--reveal", metavar="SESSION_ID"); p.add_argument("--keep", action="store_true"); p.set_defaults(f=cmd_pending)
+    st = sub.add_parser("statement", help="write one plain-text statement per key with activity in the month")
+    st.add_argument("--month", required=True, metavar="YYYY-MM|prev"); st.add_argument("--key", metavar="KEYID")
+    st.add_argument("--out", metavar="DIR", help="default: <db dir>/statements/YYYY-MM"); st.set_defaults(f=cmd_statement)
     a = ap.parse_args(argv)
     try: a.f(a)
     finally:
