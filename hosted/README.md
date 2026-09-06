@@ -23,4 +23,10 @@ python3 hosted/mock/mock_endpoint.py --port 8787 --data /tmp/mde-mock &      # k
   `$MDENGINE_HOSTED_LAUNCH="{lmp} -in {input} -log log.lammps"` drops the KOKKOS flags for a CPU stand-in pod.
 - Verified 2026-09-05 against the mock from all three surfaces (submit → pod → done → results fetched → balance debited).
 
-Production endpoint (VPS + object storage + RunPod launcher) = GJOB-094; not in this repo yet.
+## Production endpoint (GJOB-094) — `endpoint/`
+`endpoint/mde_endpoint.py` is the real service, evolved from the mock with the same routes and JSON shapes: hashed API
+keys, a credit ledger (balance = credits - billed), `GET /v1/health`, the Stripe purchase flow (`/welcome` redirect +
+signed webhook, idempotent on the Checkout Session), and job submission gated behind `MDE_RUNNERS_OPEN=1`. Operator CLI
+`endpoint/mde_admin.py`, tests `endpoint/test_endpoint.py`, and `endpoint/deploy/` (Caddy TLS, systemd, Ubuntu 24.04
+bootstrap, deploy script). Ops notes in `endpoint/README.md`. Still to come there: RunPod launcher + reaper and
+object-storage presigned URLs. The mock stays as the offline dev loop.

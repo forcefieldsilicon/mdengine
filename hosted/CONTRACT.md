@@ -63,6 +63,38 @@ Runner sequence: boot → GET job → download + untar to `/work` → `timeout w
 thread) → tar `work/ log.lammps exitcode` → PUT results → POST done → exit 0. Any failure → POST done
 with nonzero exitcode and `error`. Pod never needs inbound network, ssh, or a public IP.
 
+## Purchase flow — instant credit, no human in the loop (GJOB-096, "the RunPod way", 2026-09-06)
+Rule: a buyer is running within minutes of paying, like adding credits on RunPod. Nobody waits for an email.
+- **First purchase** (no key yet): Stripe Payment Link → after payment Stripe REDIRECTS to
+  `GET /welcome?session_id={CHECKOUT_SESSION_ID}` → endpoint fetches the Checkout Session from Stripe
+  (secret key, server-side), verifies `payment_status=paid`, creates a key, credits `amount_total` at
+  the pack's GPU-hours, shows the key ONCE with the exact `mdengine login mde_…` line + app instructions.
+  Idempotent on `session_id` (revisit shows "already issued; check your email/CLI").
+- **Top-up** (has key): CLI `mdengine account --buy` / app "Buy credits" open the Payment Link with
+  `?client_reference_id=<key_id>&prefilled_email=<email>` → the same session handler credits THAT key.
+  The welcome page then says "credited to your existing key" and shows the new balance.
+- **Webhook** `POST /v1/stripe/webhook` (`checkout.session.completed`, signature verified) runs the
+  same idempotent handler — source of truth if the buyer closes the tab before the redirect.
+- Ledger table `credits(session_id PK, key_id, usd, gpu_s, created)`; key balance = Σcredits − Σbilled.
+- Email of the key = fallback, not the path (no mail infra on day 1; Stripe's receipt goes out anyway).
+- Pack → GPU-hours map lives in the endpoint config, keyed by Stripe price id (Starter 12.5 h, Lab 50 h,
+  Group 275 h). Coupon-discounted payments still grant the full pack hours (price id decides, not amount).
+
+## Pod lifecycle — no orphan ever bills (GJOB-099)
+Invariant: **a pod exists only while a job is in `launching`/`running`.** The `/done → terminate`
+path above is the happy path, not the guarantee. Three independent enforcers, any one sufficient:
+1. **Endpoint reaper** (cron, every 5 min, idempotent): list every pod on the account; terminate any
+   whose `pod_id` maps to a terminal job, maps to no job, or has `age > wall_limit_s + 20 min`.
+   Retries with backoff; a pod that survives 3 reaper passes pages arvand. Also runs at endpoint boot,
+   so an endpoint outage cannot leave orphans behind it.
+2. **`pod_lost` kills the lost pod** before relaunching — the relaunch never adds a second pod.
+3. **Pod-side TTL**: `start.sh` runs the runner under `timeout $((wall_limit_s + 600))`; on runner
+   exit (any code) it POSTs `/done` if not already sent, then **stops its own container** — the pod is
+   dead-weight from then on and the reaper's job is only to clear the billing shell. Pods never hold an
+   account API key (a job token can't delete pods by design), so pod-side self-delete is not an option.
+Why this section exists: RUN-022 (research, 2026-09-05/06) ran on a hand-launched pod whose only
+terminator was a human; the human left for a day and $13 of credit sat one script away from zero.
+
 ## Billing (GJOB-095)
 `billed_s` runs from `running` to terminal state. Launch/pull overhead not billed. Rate by `gpu`
 from the endpoint's rate table (re-derived after the A100 test, GJOB-092). Refund on `pod_lost` past
