@@ -9,8 +9,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
  && mkdir -p /run/sshd /work /root/.ssh && chmod 700 /root/.ssh
 RUN curl -fsSL "$LMP_TARBALL_URL" -o /tmp/lmp.tgz && tar -xzf /tmp/lmp.tgz -C /opt && rm /tmp/lmp.tgz \
  && ln -s /opt/lammps/bin/lmp /usr/local/bin/lmp \
+ && mkdir -p /usr/local/share/lammps \
  && ( [ -d /opt/lammps/share/lammps/potentials ] && ln -s /opt/lammps/share/lammps/potentials /usr/local/share/lammps/potentials || true ) \
- && /usr/local/bin/lmp -h | grep -q KOKKOS
+ && test -x /opt/lammps/bin/lmp
+# NOTE: `lmp -h` cannot run here — libcuda.so.1 comes from the host driver at pod start, not the image.
 COPY start.sh runner.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/start.sh /usr/local/bin/runner.sh
 ENV LAMMPS_POTENTIALS=/usr/local/share/lammps/potentials \
