@@ -33,6 +33,10 @@ curl -sS -m 600 -o "$IN" "$INPUT_URL" || finish 71 fetch_input
 tar -tzf "$IN" | grep -Eq '(^|/)\.\.(/|$)|^/' && finish 72 unsafe_tarball
 tar -xzf "$IN" -C "$WORK" || finish 72 untar
 [ -f "$WORK/$INPUT" ] || finish 72 input_missing
+# 2b. host diagnostics into the results (driver/GPU/CUDA visibility) — makes a bad host explainable
+{ echo "== $(date -u +%FT%TZ) pod host diag"; nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>&1 | head -3
+  echo "cuda devices: $(ls /dev/nvidia* 2>/dev/null | tr '\n' ' ')"; echo "libcuda: $(ls /usr/lib/x86_64-linux-gnu/libcuda.so.* 2>/dev/null | head -1)"
+  echo "env: $(env | grep -E '^(NVIDIA|CUDA)' | tr '\n' ' ')"; } > "$WORK/hostdiag.txt" 2>&1
 # 3. run with heartbeat (last 20 thermo-ish lines of the log)
 [ -z "$LAUNCH" ] || [ "$LAUNCH" = default ] && LAUNCH='{lmp} -in {input} -k on g 1 -sf kk -pk kokkos newton on neigh half -log log.lammps'
 CMD=${LAUNCH//\{lmp\}/$LMP}; CMD=${CMD//\{input\}/$INPUT}
