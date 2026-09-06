@@ -36,6 +36,7 @@ install -d -o caddy -g caddy -m 755 /var/log/caddy 2>/dev/null || true
 echo "== files"
 install -o root -g root -m 755 "$SRC/mde_endpoint.py" /opt/mde/mde_endpoint.py
 install -o root -g root -m 755 "$SRC/mde_admin.py" /opt/mde/mde_admin.py
+install -o root -g root -m 644 "$SRC/mde_launcher.py" /opt/mde/mde_launcher.py
 ln -sf /opt/mde/mde_admin.py /usr/local/bin/mde-admin
 install -o root -g root -m 644 "$HERE/mde-endpoint.service" /etc/systemd/system/mde-endpoint.service
 install -o root -g root -m 644 "$HERE/Caddyfile" /etc/caddy/Caddyfile
@@ -45,7 +46,7 @@ if [ ! -f /etc/mde/endpoint.env ]; then
   install -o root -g mde -m 640 "$HERE/endpoint.env.example" /etc/mde/endpoint.env
   echo "!! /etc/mde/endpoint.env is the EXAMPLE — fill in the real values, then: systemctl restart mde-endpoint"
 fi
-python3 -m py_compile /opt/mde/mde_endpoint.py /opt/mde/mde_admin.py
+python3 -m py_compile /opt/mde/mde_endpoint.py /opt/mde/mde_admin.py /opt/mde/mde_launcher.py
 
 echo "== services"
 systemctl daemon-reload
