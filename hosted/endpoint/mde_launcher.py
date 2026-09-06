@@ -106,7 +106,7 @@ class RunPodLauncher:
         return self._open(req)
 
     # -- interface ---------------------------------------------------------------------------------
-    def pod_body(self, job_id, token, cloud, gpu_id):
+    def pod_body(self, job_id, token, cloud, gpu_id, wall_limit_s=86400):
         return {"name": POD_NAME_PREFIX + job_id, "image": self.image, "cloud": cloud,
                 "gpu": {"id": gpu_id, "count": 1, "minCudaVersion": self.min_cuda}, "disk": self.disk_gb,
                 "env": {"MDE_ENDPOINT": self.public_url, "MDE_JOB_ID": job_id, "MDE_JOB_TOKEN": token,
@@ -116,7 +116,7 @@ class RunPodLauncher:
         """Walk the ladder until one POST /v2/pods returns 201; return the pod id. Raises NoCapacity."""
         with self._lock:
             for rung, (cloud, gpu_id) in enumerate(self.ladder, 1):
-                try: code, text = self._request("POST", "/v2/pods", self.pod_body(job_id, token, cloud, gpu_id))
+                try: code, text = self._request("POST", "/v2/pods", self.pod_body(job_id, token, cloud, gpu_id, wall_limit_s))
                 except LauncherError as e: code, text = 0, str(e)
                 pod_id = None
                 if code == 201:                                       # a Pod body: carries env, so never logged
