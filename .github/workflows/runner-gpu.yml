@@ -1,0 +1,49 @@
+# Build the hosted-tier GPU runner image and push to GHCR. Default = fast path from the prebuilt
+# binary release asset; set build_from_source=true to compile (see docker/runner-gpu/Dockerfile).
+name: runner-gpu
+on:
+  workflow_dispatch:
+    inputs:
+      kokkos_arch:
+        description: 'Kokkos arch (ADA89 | AMPERE80)'
+        default: ADA89
+        type: string
+      tarball_url:
+        description: 'Prebuilt lammps tarball URL (release asset)'
+        default: https://github.com/forcefieldsilicon/mdengine/releases/download/runner-bin-20260905/lammps-kokkos-ADA89.tar.gz
+        type: string
+      build_from_source:
+        description: 'Compile instead of using the tarball'
+        default: false
+        type: boolean
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pick Dockerfile
+        id: pick
+        run: |
+          if [ "${{ inputs.build_from_source }}" = "true" ]; then echo "file=docker/runner-gpu/Dockerfile" >> "$GITHUB_OUTPUT"; else echo "file=docker/runner-gpu/Dockerfile.prebuilt" >> "$GITHUB_OUTPUT"; fi
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker/runner-gpu
+          file: ${{ steps.pick.outputs.file }}
+          push: true
+          build-args: |
+            KOKKOS_ARCH=${{ inputs.kokkos_arch }}
+            LMP_TARBALL_URL=${{ inputs.tarball_url }}
+          tags: |
+            ghcr.io/forcefieldsilicon/mdengine-runner-gpu:${{ inputs.kokkos_arch }}
+            ghcr.io/forcefieldsilicon/mdengine-runner-gpu:${{ inputs.kokkos_arch }}-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/forcefieldsilicon/mdengine
