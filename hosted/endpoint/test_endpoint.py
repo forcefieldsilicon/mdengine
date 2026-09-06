@@ -386,7 +386,7 @@ class TestRunPodLauncher(unittest.TestCase):
             self.assertEqual((m, p), ("POST", "/v2/pods")); self.assertEqual(b["cloud"], cloud)
             self.assertEqual(b["gpu"], {"id": gid, "count": 1, "minCudaVersion": "12.4"}); self.assertEqual(b["disk"], 20)
             self.assertEqual(b["name"], "mde-MDJOB-20260906-ABC123"); self.assertEqual(b["image"], L.DEFAULT_IMAGE)
-            self.assertEqual(b["env"], {"MDE_ENDPOINT": "https://api.example.test", "MDE_JOB_ID": "MDJOB-20260906-ABC123", "MDE_JOB_TOKEN": "jt_" + "0" * 32})
+            self.assertEqual(b["env"], {"MDE_ENDPOINT": "https://api.example.test", "MDE_JOB_ID": "MDJOB-20260906-ABC123", "MDE_JOB_TOKEN": "jt_" + "0" * 32, "MDE_WALL_LIMIT_S": "3600"})
             self.assertNotIn("dataCenterIds", b)
         out = log.getvalue(); self.assertEqual(out.count('"ev":"launch.attempt"'), 2); self.assertIn('"code":500', out)
         self.assertNotIn(self.KEY, out); self.assertNotIn("jt_" + "0" * 32, out)

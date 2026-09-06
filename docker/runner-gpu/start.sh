@@ -1,7 +1,11 @@
 #!/bin/sh
 # Pod entrypoint: install the operator's public key, report the GPU, serve ssh.
 set -eu
-if [ -n "${MDE_JOB_ID:-}" ]; then exec /usr/local/bin/runner.sh; fi   # production: pull one job, exit
+if [ -n "${MDE_JOB_ID:-}" ]; then
+  # production: pull one job, exit. Pod-side TTL (CONTRACT "Pod lifecycle" #3): even with the endpoint
+  # unreachable, this container ends at wall+600 s, so GPU billing is bounded without any outside help.
+  exec timeout --signal=TERM --kill-after=60 "$(( ${MDE_WALL_LIMIT_S:-86400} + 600 ))" /usr/local/bin/runner.sh
+fi
 if [ -n "${PUBLIC_KEY:-}" ]; then
   printf '%s\n' "$PUBLIC_KEY" >> /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys

@@ -109,7 +109,8 @@ class RunPodLauncher:
     def pod_body(self, job_id, token, cloud, gpu_id):
         return {"name": POD_NAME_PREFIX + job_id, "image": self.image, "cloud": cloud,
                 "gpu": {"id": gpu_id, "count": 1, "minCudaVersion": self.min_cuda}, "disk": self.disk_gb,
-                "env": {"MDE_ENDPOINT": self.public_url, "MDE_JOB_ID": job_id, "MDE_JOB_TOKEN": token}}
+                "env": {"MDE_ENDPOINT": self.public_url, "MDE_JOB_ID": job_id, "MDE_JOB_TOKEN": token,
+                        "MDE_WALL_LIMIT_S": str(int(wall_limit_s))}}   # pod-side TTL (start.sh): wall + 600 s
 
     def create(self, job_id, token, wall_limit_s, gpu):
         """Walk the ladder until one POST /v2/pods returns 201; return the pod id. Raises NoCapacity."""
