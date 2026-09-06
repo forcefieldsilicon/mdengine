@@ -32,7 +32,7 @@ jobs:
           context: docker/runner-openmm
           push: true
           tags: |
-            ghcr.io/forcefieldsilicon/mdengine-runner-openmm:${{ inputs.tag }}
+            ghcr.io/forcefieldsilicon/mdengine-runner-openmm:${{ inputs.tag || 'latest' }}
             ghcr.io/forcefieldsilicon/mdengine-runner-openmm:${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/forcefieldsilicon/mdengine
