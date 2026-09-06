@@ -189,8 +189,13 @@ public final class HostedClient {
     }
 
     private func serverError(_ r: (Int, Data)) -> HostedError {
-        let msg = (try? JSONSerialization.jsonObject(with: r.1) as? [String: Any])?["error"] as? String
+        let body = (try? JSONSerialization.jsonObject(with: r.1) as? [String: Any]) ?? [:]
+        let code = body["error"] as? String
+        let human = body["message"] as? String          // endpoint's plain-language explanation, when it sends one
+        let msg = human ?? code
         switch r.0 {
+        case 503 where code == "gpu_runners_open_soon":
+            return HostedError(human ?? "GPU runners are not open yet; your credits are safe and never expire.", status: 503)
         case 401: return HostedError("API key rejected (HTTP 401) — check `mdengine login`", status: 401)
         case 402: return HostedError("insufficient credit balance (HTTP 402) — buy credits at https://forcefieldsilicon.com/mdengine", status: 402)
         default:  return HostedError("endpoint error HTTP \(r.0)\(msg.map { ": \($0)" } ?? "")", status: r.0)
