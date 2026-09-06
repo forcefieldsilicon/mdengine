@@ -2,6 +2,11 @@
 # One image for all NVIDIA architectures (OpenMM JITs CUDA kernels at runtime).
 name: runner-openmm
 on:
+  # workflow_dispatch alone is invisible to the API until the workflow exists on the default branch,
+  # so also build when this image's files change on a working branch.
+  push:
+    branches: [hosted-2026-09-06]
+    paths: ['docker/runner-openmm/**', '.github/workflows/runner-openmm.yml']
   workflow_dispatch:
     inputs:
       tag:
