@@ -106,17 +106,17 @@ class RunPodLauncher:
         return self._open(req)
 
     # -- interface ---------------------------------------------------------------------------------
-    def pod_body(self, job_id, token, cloud, gpu_id, wall_limit_s=86400):
-        return {"name": POD_NAME_PREFIX + job_id, "image": self.image, "cloud": cloud,
+    def pod_body(self, job_id, token, cloud, gpu_id, wall_limit_s=86400, image=None):
+        return {"name": POD_NAME_PREFIX + job_id, "image": image or self.image, "cloud": cloud,
                 "gpu": {"id": gpu_id, "count": 1, "minCudaVersion": self.min_cuda}, "disk": self.disk_gb,
                 "env": {"MDE_ENDPOINT": self.public_url, "MDE_JOB_ID": job_id, "MDE_JOB_TOKEN": token,
                         "MDE_WALL_LIMIT_S": str(int(wall_limit_s))}}   # pod-side TTL (start.sh): wall + 600 s
 
-    def create(self, job_id, token, wall_limit_s, gpu):
+    def create(self, job_id, token, wall_limit_s, gpu, image=None):
         """Walk the ladder until one POST /v2/pods returns 201; return the pod id. Raises NoCapacity."""
         with self._lock:
             for rung, (cloud, gpu_id) in enumerate(self.ladder, 1):
-                try: code, text = self._request("POST", "/v2/pods", self.pod_body(job_id, token, cloud, gpu_id, wall_limit_s))
+                try: code, text = self._request("POST", "/v2/pods", self.pod_body(job_id, token, cloud, gpu_id, wall_limit_s, image))
                 except LauncherError as e: code, text = 0, str(e)
                 pod_id = None
                 if code == 201:                                       # a Pod body: carries env, so never logged
@@ -163,18 +163,19 @@ class FakeLauncher:
         self.public_url = public_url; self.pods = {}; self.deleted = []; self.calls = []
         self.fail_create = False; self.fail_delete = set(); self._n = 0; self._lock = threading.Lock()
 
-    def add_pod(self, name, created_at=None, pod_id=None, env=None):
+    def add_pod(self, name, created_at=None, pod_id=None, env=None, image=None):
         with self._lock:
             self._n += 1; pid = pod_id or "fakepod%d" % self._n
             self.pods[pid] = {"id": pid, "name": name, "status": "RUNNING", "cloud": "COMMUNITY",
-                              "createdAt": created_at or iso_now(), "env": dict(env or {})}
+                              "createdAt": created_at or iso_now(), "env": dict(env or {}), "image": image}
             return pid
 
-    def create(self, job_id, token, wall_limit_s, gpu):
+    def create(self, job_id, token, wall_limit_s, gpu, image=None):
         self.calls.append(("create", job_id))
         log("launch.attempt", job=job_id, rung=1, cloud="FAKE", gpu_id="fake", gpu=gpu, wall_limit_s=wall_limit_s, ok=not self.fail_create)
         if self.fail_create: raise NoCapacity("fake: no capacity")
-        return self.add_pod(POD_NAME_PREFIX + job_id, env={"MDE_ENDPOINT": self.public_url, "MDE_JOB_ID": job_id, "MDE_JOB_TOKEN": token})
+        return self.add_pod(POD_NAME_PREFIX + job_id, env={"MDE_ENDPOINT": self.public_url, "MDE_JOB_ID": job_id, "MDE_JOB_TOKEN": token,
+                                                          "MDE_WALL_LIMIT_S": str(int(wall_limit_s))}, image=image)
 
     def delete(self, pod_id):
         self.calls.append(("delete", pod_id))

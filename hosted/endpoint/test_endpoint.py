@@ -37,7 +37,8 @@ class Server:
         env = {"MDE_DB": os.path.join(self.dir, "t.sqlite"), "MDE_BLOBS": os.path.join(self.dir, "blobs"), "MDE_BIND": "127.0.0.1:0",
                "STRIPE_SECRET_KEY": "sk_test_fake", "STRIPE_WEBHOOK_SECRET": WEBHOOK_SECRET,
                "MDE_PACKS": f"{PRICE_STARTER}:25:12.5,{PRICE_LAB}:100:50", "MDE_RUNNERS_OPEN": "1" if runners_open else "",
-               "MDE_ADMIN_TOKEN": "admintok"}
+               "MDE_ADMIN_TOKEN": "admintok",
+               "MDE_RUNNER_IMAGES": "openmm:ghcr.io/example/openmm:latest"}
         self.cfg = E.Config(env); self.srv, self.app = E.make_server(self.cfg)
         self.base = self.app.public_url
         if launcher is not None: launcher.public_url = self.base; self.app.launcher = launcher
@@ -338,6 +339,19 @@ class TestLauncherFlow(Base):
 
     def pod_token(self, jid):
         pod = self.s.app.db.job(jid)["pod_id"]; return self.fake.pods[pod]["env"]["MDE_JOB_TOKEN"]
+
+    def test_runner_selection(self):
+        # unknown runner -> 400 naming the known ones; known runner -> pod created from that image
+        full, kid = self.s.admin_key(20)
+        code, body = self.s.js("POST", "/v1/jobs", body={"input": "run.py", "runner": "nope"}, key=full)
+        self.assertEqual(code, 400); self.assertIn("unknown runner", body["error"]); self.assertIn("openmm", body["message"])
+        jid = self.s.js("POST", "/v1/jobs", body={"input": "run.py", "launch": "python3 {input}", "runner": "openmm", "wall_limit_s": 1800}, key=full)[1]["id"]
+        self.s.req("PUT", self.s.app.blob_url(f"{jid}.in.tar.gz")[0], raw=b"pkg")
+        self.assertEqual(self.s.js("POST", f"/v1/jobs/{jid}/start", key=full)[0], 202)
+        self.assertTrue(self.s.app.join_bg())
+        pod = self.fake.pods[self.s.app.db.job(jid)["pod_id"]]
+        self.assertEqual(pod.get("image"), "ghcr.io/example/openmm:latest")
+        self.assertEqual(pod["env"]["MDE_WALL_LIMIT_S"], "1800")
 
     def test_start_launches_pod_then_done_deletes_it(self):
         self.assertEqual(self.s.js("GET", "/v1/health")[1]["launcher"], "fake")

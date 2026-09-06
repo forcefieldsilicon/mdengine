@@ -97,6 +97,11 @@ class Config:
         # RunPod launcher (mde_launcher.py). No RUNPOD_API_KEY -> no launcher -> `start` writes launch.env.
         self.runpod_api_key = e.get("RUNPOD_API_KEY", "")
         self.runner_image = e.get("MDE_RUNNER_IMAGE", "")             # default in mde_launcher.DEFAULT_IMAGE
+        # named runner flavours a job may pick via spec["runner"]: "lammps:ghcr.io/..,openmm:ghcr.io/.."
+        self.runner_images = {}
+        for part in e.get("MDE_RUNNER_IMAGES", "").split(","):
+            if ":" in part:
+                name, img = part.split(":", 1); self.runner_images[name.strip()] = img.strip()
         self.pod_disk_gb = int(e.get("MDE_POD_DISK_GB", "20") or 20)
         self.min_cuda = e.get("MDE_MIN_CUDA", "12.4")
         self.gpu_ladder = parse_ladder(e.get("MDE_GPU_LADDER", ""))
@@ -315,7 +320,10 @@ class App:
     # -- pods: one per job, created after `start`, deleted at every terminal state
     def launch_job(self, jid, token, wall, gpu):
         """Background: walk the launcher's ladder; queued -> launching(pod_id) or failed:no_capacity (unbilled)."""
-        try: pod_id = self.launcher.create(jid, token, wall, gpu)
+        j = self.db.job(jid)
+        runner = json.loads(j["spec"]).get("runner") if j else None
+        image = self.cfg.runner_images.get(runner) if runner else None
+        try: pod_id = self.launcher.create(jid, token, wall, gpu, image=image)
         except NoCapacity as e:
             log("job.no_capacity", job=jid, error=str(e)); self.fail_unlaunched(jid); return
         except Exception as e:
@@ -626,6 +634,9 @@ mdengine run --gpu in.lmp</pre>
             if spec is None or "input" not in spec: return self.send(400, {"error": "input required"})
             gpu = spec.get("gpu", "any"); rate = self.app.cfg.rates.get(gpu)
             if rate is None: return self.send(400, {"error": "unknown gpu"})
+            runner = spec.get("runner")
+            if runner and runner not in self.app.cfg.runner_images:
+                return self.send(400, {"error": "unknown runner", "message": "known runners: %s" % ", ".join(sorted(self.app.cfg.runner_images)) if self.app.cfg.runner_images else "no named runners configured"})
             try: est = int(spec.get("estimate_s", 0)); wall = int(spec.get("wall_limit_s", 14400))
             except (TypeError, ValueError): return self.send(400, {"error": "bad numbers"})
             if wall > 86400 or wall <= 0: return self.send(400, {"error": "wall_limit_s must be 1..86400"})
