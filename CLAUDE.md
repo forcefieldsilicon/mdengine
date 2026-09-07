@@ -18,7 +18,15 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
 - Remote execution (`Sources/MDEngineMCP/RemoteJobs.swift`): hosts in
   `~/.mdengine/hosts.json`; test bed = `localhost-test` host over ssh to this Mac
   (own key in ~/.ssh/authorized_keys). `lmp` must be an absolute path — no login
-  PATH over ssh. Release packaging: `make_tools.sh` (CLI+MCP tarball).
+  PATH over ssh. Release packaging: `make_tools.sh` (CLI+MCP tarball). `make_mcpb.sh` = signed MCP Bundle (manifest generated from live tools/list; needs `npm i -g @anthropic-ai/mcpb`).
+- MCP Registry (registry.modelcontextprotocol.io): listed as `com.forcefieldsilicon/mdengine`
+  via `server.json`. Per release: bump `version` + package `identifier` URL + `fileSha256`
+  (from make_mcpb output), attach the .mcpb to the GitHub release FIRST, then
+  `mcp-publisher publish`. `description` ≤ 100 chars (422 otherwise). Auth = DNS TXT on
+  forcefieldsilicon.com; `mcp-publisher login dns --domain forcefieldsilicon.com --private-key ...`
+  with the key kept outside git (~/mdengine-hosted/mcp-registry/).
+- Tool `title` + annotations live in `toolMeta` (main.swift) — add an entry for every new tool.
+- Notarize bare binaries as a zip (`NOTARY_PROFILE=mdengine-notary`); tickets are online-only.
 - Hosted GPU tier (`Sources/LAMMPSCore/HostedClient.swift`, `hosted/CONTRACT.md`): dev
   loop = `python3 hosted/mock/mock_endpoint.py --port 8788 --data <dir>` +
   `MDENGINE_HOSTED_URL=http://127.0.0.1:8788/v1 MDENGINE_HOSTED_LAUNCH="{lmp} -in {input} -log log.lammps"`,
