@@ -48,7 +48,7 @@ hb   # immediate: state -> running before the first 30 s tick
 ${TMO:+$TMO --signal=TERM --kill-after=30 "${WALL:-86400}"} bash -c "$CMD" > "$WORK/stdout.txt" 2>&1; RC=$?
 kill $HB 2>/dev/null; wait $HB 2>/dev/null
 echo "$RC" > "$WORK/exitcode"
-ERR=null; [ $RC -eq 124 ] && ERR=wall_limit; { [ $RC -ne 0 ] && [ $RC -ne 124 ]; } && ERR=lammps_error
+ERR=null; [ $RC -eq 124 ] && ERR=wall_limit; { [ $RC -ne 0 ] && [ $RC -ne 124 ]; } && ERR=runner_error
 # 4. results (never ship the input tarball back; cap handled by the endpoint's presigned size limit)
 tar -czf "$RES" -C "$WORK" . || finish 73 pack
 curl -sS -m 1800 -X PUT -H 'Content-Type: application/gzip' --upload-file "$RES" "$PUT_URL" >/dev/null || finish 74 upload
