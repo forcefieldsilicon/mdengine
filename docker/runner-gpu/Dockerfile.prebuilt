@@ -1,0 +1,27 @@
+# MDEngine GPU runner — FAST PATH: uses the prebuilt LAMMPS KOKKOS/CUDA tarball published as a GitHub
+# release asset instead of compiling (~3 min vs ~60). Same runtime contract as Dockerfile.
+#   docker build -f Dockerfile.prebuilt --build-arg LMP_TARBALL_URL=... -t mdengine-runner-gpu:ada89 .
+# Slim base: lmp links only libcudart.so.12 (+libgomp); the full cuda-runtime image is ~1.5 GB of unused
+# libraries and made Community pods take ~9 min to pull (measured 2026-09-06). Base image + one .so instead.
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS cudart
+FROM nvidia/cuda:12.4.1-base-ubuntu22.04
+ARG LMP_TARBALL_URL
+COPY --from=cudart /usr/local/cuda/lib64/libcudart.so.12* /usr/local/cuda/lib64/
+RUN echo /usr/local/cuda/lib64 > /etc/ld.so.conf.d/cuda.conf && ldconfig
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libgomp1 openssh-server rsync ca-certificates curl python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /run/sshd /work /root/.ssh && chmod 700 /root/.ssh
+RUN curl -fsSL "$LMP_TARBALL_URL" -o /tmp/lmp.tgz && tar -xzf /tmp/lmp.tgz -C /opt && rm /tmp/lmp.tgz \
+ && ln -s /opt/lammps/bin/lmp /usr/local/bin/lmp \
+ && mkdir -p /usr/local/share/lammps \
+ && ( [ -d /opt/lammps/share/lammps/potentials ] && ln -s /opt/lammps/share/lammps/potentials /usr/local/share/lammps/potentials || true ) \
+ && test -x /opt/lammps/bin/lmp
+# NOTE: `lmp -h` cannot run here — libcuda.so.1 comes from the host driver at pod start, not the image.
+COPY start.sh runner.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/start.sh /usr/local/bin/runner.sh
+ENV LAMMPS_POTENTIALS=/usr/local/share/lammps/potentials \
+    OMP_NUM_THREADS=1
+WORKDIR /work
+EXPOSE 22
+CMD ["/usr/local/bin/start.sh"]

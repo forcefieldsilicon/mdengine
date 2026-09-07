@@ -8,6 +8,14 @@ struct SettingsView: View {
     @AppStorage("backgroundBrightness") private var backgroundBrightness = 0.05
 
     var body: some View {
+        TabView {
+            display.tabItem { Label("Display", systemImage: "cube") }
+            HostedSettingsView().tabItem { Label("Accelerated", systemImage: "bolt.fill") }
+        }
+        .frame(width: 460)
+    }
+
+    private var display: some View {
         Form {
             Slider(value: $atomPointSize, in: 4...32) {
                 Text("Atom size")
@@ -28,6 +36,5 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 380)
     }
 }

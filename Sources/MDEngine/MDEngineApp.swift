@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct MDEngineApp: App {
     @StateObject private var model = ContentViewModel()
+    @StateObject private var hosted = HostedJobsModel()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
@@ -37,10 +38,17 @@ struct MDEngineApp: App {
         // macOS state restoration was resurrecting confusing blank duplicates.
         Window("MDEngine", id: "main") {
             ContentView(model: model)
+                .modifier(HostedLaunch(hosted: hosted, viewer: model))
         }
         .commands {
-            AppCommands(model: model)
+            AppCommands(model: model, hosted: hosted)
         }
+
+        // Hosted GPU runs: submit, watch live thermo, results auto-open (GJOB-091).
+        Window("Accelerated Runs", id: "hosted") {
+            HostedJobsView(model: hosted)
+        }
+        .defaultSize(width: 820, height: 420)
 
         Settings {
             SettingsView()
@@ -48,10 +56,12 @@ struct MDEngineApp: App {
     }
 }
 
-/// Menu bar: MDEngine · File (Load/Export) · Edit (Application Settings…) · Help (User Manual).
+/// Menu bar: MDEngine · File (Load/Export/Run Accelerated) · Edit (Application Settings…) · Help (User Manual).
 struct AppCommands: Commands {
     @ObservedObject var model: ContentViewModel
+    @ObservedObject var hosted: HostedJobsModel
     @AppStorage("orthographicProjection") private var orthographic = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -77,6 +87,14 @@ struct AppCommands: Commands {
             Button("Export Video…") { model.exportVideo(format: .mp4) }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(model.frames.count < 2)
+            Divider()
+            Button("Run Accelerated…") {
+                openWindow(id: "hosted")
+                if hosted.hasCredentials { hosted.submitPanel() }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            Button("Accelerated Runs") { openWindow(id: "hosted") }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
         }
         CommandGroup(after: .pasteboard) {
             Divider()
@@ -102,6 +120,26 @@ struct AppCommands: Commands {
                     FileManager.default.fileExists(atPath: $0.path) ? $0 : nil
                 } ?? fallback
                 NSWorkspace.shared.open(manual)
+            }
+        }
+    }
+}
+
+/// Connects the hosted tier to the viewer and honours `MDEngine --run-accelerated <deck.in>`
+/// (used by `mdengine run --gpu --open` and by tests: submit + show the runs window, no panels).
+private struct HostedLaunch: ViewModifier {
+    let hosted: HostedJobsModel
+    let viewer: ContentViewModel
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            // A finished hosted run lands in the viewer like any opened file.
+            hosted.openTrajectory = { url in viewer.load(url: url) }
+            let args = CommandLine.arguments
+            if let i = args.firstIndex(of: "--run-accelerated"), i + 1 < args.count {
+                openWindow(id: "hosted")
+                hosted.submit(input: URL(fileURLWithPath: args[i + 1]))
             }
         }
     }

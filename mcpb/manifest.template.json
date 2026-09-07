@@ -1,0 +1,24 @@
+{
+  "manifest_version": "0.3",
+  "name": "mdengine",
+  "display_name": "MDEngine",
+  "version": "0.0.0",
+  "description": "Inspect, render and analyse molecular-dynamics trajectories and run LAMMPS jobs as detached background work.",
+  "long_description": "MDEngine's MCP server gives an AI agent a molecular-dynamics workbench on macOS: trajectory inspection (XYZ, extended-XYZ, LAMMPS dump), deposition/oxidation depth profiles, Metal-rendered PNG frames and MP4/GIF videos so the agent can *see* a simulation, frame export and decimation, and a detached LAMMPS job runner (submit, status, log tail, files, cancel) that survives the server exiting and display sleep. Optional remote hosts over ssh and the paid ForceField Silicon GPU tier. Simulation decks are programs: a submitted deck runs with your user's privileges — read decks before running them.",
+  "author": { "name": "ForceField Silicon (Gitinama Inc.)", "url": "https://forcefieldsilicon.com" },
+  "homepage": "https://forcefieldsilicon.com/mdengine",
+  "documentation": "https://github.com/forcefieldsilicon/mdengine#mcp-server",
+  "support": "https://github.com/forcefieldsilicon/mdengine/issues",
+  "repository": { "type": "git", "url": "https://github.com/forcefieldsilicon/mdengine" },
+  "license": "MIT",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/mdengine-mcp",
+    "mcp_config": { "command": "${__dirname}/server/mdengine-mcp", "args": [], "env": {} }
+  },
+  "tools": [],
+  "keywords": ["molecular-dynamics", "lammps", "trajectory", "simulation", "materials", "chemistry", "rendering", "macos"],
+  "compatibility": { "platforms": ["darwin"] },
+  "privacy_policies": ["https://github.com/forcefieldsilicon/mdengine/blob/main/PRIVACY.md"]
+}

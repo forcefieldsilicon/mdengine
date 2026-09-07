@@ -1,0 +1,25 @@
+# Stage for .github/workflows/runner-gpu.yml in the PUBLIC repo (forcefieldsilicon/mdengine).
+# Compiles LAMMPS+KOKKOS/CUDA on a plain x86 runner (nvcc needs no GPU) and pushes to ghcr.io.
+# ~60-90 min on the 4-core runner; well under the 360-min cap. Manual trigger only.
+name: runner-gpu
+on:
+  workflow_dispatch:
+    inputs:
+      kokkos_arch:
+        description: 'Kokkos arch (ADA89 | AMPERE80 | AMPERE86 | HOPPER90)'
+        default: ADA89
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker/runner-gpu
+          push: true
+          build-args: KOKKOS_ARCH=${{ inputs.kokkos_arch }}
+          tags: ghcr.io/forcefieldsilicon/mdengine-runner-gpu:${{ inputs.kokkos_arch }}

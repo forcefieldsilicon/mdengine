@@ -44,7 +44,13 @@ MDEngine derives it from the LAMMPS install.
 
 ## MCP server
 
-`mdengine-mcp` is a dependency-free MCP stdio server. Register with Claude Code:
+`mdengine-mcp` is a dependency-free MCP stdio server, listed in the
+[MCP Registry](https://registry.modelcontextprotocol.io) as
+`com.forcefieldsilicon/mdengine` (`server.json` in this repo). Each release ships a
+signed macOS [MCP Bundle](https://github.com/modelcontextprotocol/mcpb)
+(`mdengine-mcp-<version>-macos-arm64.mcpb`): double-click it to install in Claude
+Desktop, or unpack it (`mcpb unpack`) for any other client. Built from source, register
+with Claude Code:
 
 ```sh
 claude mcp add mdengine /path/to/.build/release/mdengine-mcp
@@ -71,6 +77,39 @@ or in Claude Desktop's `claude_desktop_config.json`:
 | `list_hosts` | Execution hosts from `~/.mdengine/hosts.json` and which is the default |
 | `fetch_job` | Pull a remote job's run directory (dumps, data) + logs into the local job dir under `results/` |
 | `run_lammps` | Synchronous run for short tests only |
+
+### Hosted GPU tier over MCP (no install)
+
+The same jobs are reachable from **any MCP client that speaks HTTP** — Claude Code, Claude.ai
+custom connectors, Cursor, Goose — via the hosted endpoint's Streamable HTTP server:
+
+```sh
+claude mcp add --transport http mdengine-cloud https://api.forcefieldsilicon.com/mcp
+```
+
+Sign in when the client asks (OAuth 2.1: a consent page where you paste your API key once; the
+client keeps a token, the key stays with you). Scripted clients may instead send the key directly
+as `--header "Authorization: Bearer mde_YOUR_KEY"`. The key comes with a prepaid credit pack
+([forcefieldsilicon.com/mdengine](https://forcefieldsilicon.com/mdengine)). `initialize` and
+`tools/list` work without signing in; tool calls without a credential return 401 with the OAuth
+discovery pointer, which is what makes clients offer the sign-in. Tools: `account`, `submit_job` (deck inline, ≤ 8 MB),
+`create_job` + `start_job` (big decks via presigned PUT), `job_status`, `job_log`,
+`job_results`, `list_jobs`, `delete_results`, `cancel_job`. Discovery card:
+`https://api.forcefieldsilicon.com/.well-known/mcp/server-card.json`. Server code:
+`hosted/endpoint/mde_mcp.py`.
+
+Troubleshooting the hosted connector:
+
+| Symptom | Cause / fix |
+|---|---|
+| Client says authentication required / 401 | Use the client's sign-in (OAuth) and paste your `mde_…` key on the consent page, or add the header `Authorization: Bearer mde_…`. Keys are issued at purchase and shown once. |
+| Consent page says the key was not recognised | Keys are `mde_` + 32 hex characters; a revoked key no longer works. `mdengine account` prints the balance for a saved key. |
+| "insufficient balance" | Top up at forcefieldsilicon.com/mdengine; submissions need credit for at least 15 min at the GPU rate. |
+| "gpu_runners_open_soon" (503) | Runners are temporarily closed; credits are safe. |
+| HTTP 429 | Too many keyless requests from one IP; add the key or slow down. |
+| `job_results` says results unavailable | Files were deleted by `delete_results`, the run produced none, or the 30-day purge ran. |
+| Job `failed` with `runner_error` / `lammps_error` | The deck itself failed; `job_results` (if present) or `job_log` holds the LAMMPS error text. |
+| Job `failed` with `pod_lost` / `no_capacity` | Infrastructure; not billed. Resubmit. |
 
 Jobs run in the deck's own directory (relative `read_data` paths work) and
 launch with `-sf omp -pk omp N` so the OPENMP package is actually engaged;
@@ -126,6 +165,11 @@ dev tool (an agent that can run `make` can run anything), but be deliberate
 about which decks — and which agents — you hand to the job runner. Sandboxed
 execution (containers, no network, resource caps) is how a future hosted tier
 makes running untrusted decks safe; the local server does not sandbox.
+
+## Privacy
+
+The local tools collect nothing; see [PRIVACY.md](PRIVACY.md), which also covers the
+hosted GPU tier.
 
 ## License
 
