@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mdengine",
   "display_name": "MDEngine",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Inspect, render and analyse molecular-dynamics trajectories and run LAMMPS jobs as detached background work.",
   "long_description": "MDEngine's MCP server gives an AI agent a molecular-dynamics workbench on macOS: trajectory inspection (XYZ, extended-XYZ, LAMMPS dump), deposition/oxidation depth profiles, Metal-rendered PNG frames and MP4/GIF videos so the agent can *see* a simulation, frame export and decimation, and a detached LAMMPS job runner (submit, status, log tail, files, cancel) that survives the server exiting and display sleep. Optional remote hosts over ssh and the paid ForceField Silicon GPU tier. Simulation decks are programs: a submitted deck runs with your user's privileges \u2014 read decks before running them.",
   "author": {
