@@ -78,6 +78,24 @@ or in Claude Desktop's `claude_desktop_config.json`:
 | `fetch_job` | Pull a remote job's run directory (dumps, data) + logs into the local job dir under `results/` |
 | `run_lammps` | Synchronous run for short tests only |
 
+### Hosted GPU tier over MCP (no install)
+
+The same jobs are reachable from **any MCP client that speaks HTTP** — Claude Code, Claude.ai
+custom connectors, Cursor, Goose — via the hosted endpoint's Streamable HTTP server:
+
+```sh
+claude mcp add --transport http mdengine-cloud https://api.forcefieldsilicon.com/mcp \
+  --header "Authorization: Bearer mde_YOUR_KEY"
+```
+
+The key comes with a prepaid credit pack ([forcefieldsilicon.com/mdengine](https://forcefieldsilicon.com/mdengine)).
+`initialize` and `tools/list` work without a key; tool calls without one return an in-band
+error that says how to get one. Tools: `account`, `submit_job` (deck inline, ≤ 8 MB),
+`create_job` + `start_job` (big decks via presigned PUT), `job_status`, `job_log`,
+`job_results`, `list_jobs`, `cancel_job`. Discovery card:
+`https://api.forcefieldsilicon.com/.well-known/mcp/server-card.json`. Server code:
+`hosted/endpoint/mde_mcp.py`.
+
 Jobs run in the deck's own directory (relative `read_data` paths work) and
 launch with `-sf omp -pk omp N` so the OPENMP package is actually engaged;
 `$LAMMPS_POTENTIALS` is derived from the LAMMPS install when unset.

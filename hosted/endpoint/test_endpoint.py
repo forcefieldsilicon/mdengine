@@ -4,7 +4,7 @@ temp db and a fake Stripe (stripe_fetch_session monkeypatched). No network beyon
 
   python3 hosted/endpoint/test_endpoint.py -v
 """
-import io, json, os, re, shutil, sys, tempfile, threading, time, unittest, urllib.error, urllib.request
+import io, json, os, re, shutil, sys, tarfile, tempfile, threading, time, unittest, urllib.error, urllib.request
 from contextlib import redirect_stdout
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -518,6 +518,100 @@ class TestLauncherFlow(Base):
         self.assertEqual((st["state"], st["error"], st["attempt"], st["cost_usd"], st["pod_id"]), ("failed", "no_capacity", 2, 0.0, None))
         self.assertEqual(self.fake.deleted, [pod1]); self.assertEqual(self.fake.pods, {})
         self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 20.0)
+
+class TestMCP(Base):
+    """MCP over Streamable HTTP (mde_mcp.py): handshake without a key, in-band auth errors, inline-deck submit
+    through the pod flow, two-step create/start, cancel, server card. REST and MCP must agree on every state."""
+    runners_open = True
+    def rpc(self, method, params=None, key=None, id=1):
+        body = {"jsonrpc": "2.0", "id": id, "method": method}
+        if params is not None: body["params"] = params
+        return self.s.js("POST", "/mcp", body=body, key=key)
+    def call(self, name, args=None, key=None):
+        code, r = self.rpc("tools/call", {"name": name, "arguments": args or {}}, key=key)
+        self.assertEqual(code, 200, r); res = r["result"]
+        return res.get("structuredContent"), res.get("isError", False), res["content"][0]["text"]
+    def launch_token(self):
+        with open(self.s.app.launch_env) as fh: return dict(l.split("=", 1) for l in fh.read().splitlines())["MDE_JOB_TOKEN"]
+
+    def test_handshake_and_tools_list_need_no_key(self):
+        code, r = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}})
+        self.assertEqual(code, 200); res = r["result"]
+        self.assertEqual(res["protocolVersion"], "2025-06-18"); self.assertEqual(res["serverInfo"]["name"], "com.forcefieldsilicon/mdengine")
+        self.assertIn("tools", res["capabilities"]); self.assertIn("Authorization: Bearer", res["instructions"])
+        self.assertEqual(self.rpc("initialize", {"protocolVersion": "1999-01-01"})[1]["result"]["protocolVersion"], "2025-06-18")
+        code, body, hdr = self.s.req("POST", "/mcp", body={"jsonrpc": "2.0", "method": "notifications/initialized"})
+        self.assertEqual(code, 202); self.assertEqual(body, b""); self.assertEqual(hdr["Access-Control-Allow-Origin"], "*")
+        code, r = self.rpc("tools/list"); tools = r["result"]["tools"]; names = [t["name"] for t in tools]
+        self.assertEqual(names, ["account", "submit_job", "create_job", "start_job", "job_status", "job_log", "job_results", "list_jobs", "cancel_job"])
+        for t in tools:
+            self.assertTrue(t["title"]); self.assertEqual(t["inputSchema"]["type"], "object")
+            for h in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"): self.assertIn(h, t["annotations"])
+        self.assertTrue(next(t for t in tools if t["name"] == "cancel_job")["annotations"]["destructiveHint"])
+        self.assertEqual(self.rpc("ping")[1]["result"], {})
+        self.assertEqual(self.rpc("nope")[1]["error"]["code"], -32601)
+        self.assertEqual(self.s.js("POST", "/mcp", raw=b"not json")[1]["error"]["code"], -32700)
+        self.assertEqual(self.s.js("POST", "/mcp", body=[{"jsonrpc": "2.0", "id": 1, "method": "ping"}])[1]["error"]["code"], -32600)
+        self.assertEqual(self.rpc("tools/call", {"name": "nope", "arguments": {}})[1]["error"]["code"], -32602)
+        self.assertEqual(self.s.req("GET", "/mcp")[0], 405); self.assertEqual(self.s.req("DELETE", "/mcp")[0], 405)
+        code, _, hdr = self.s.req("OPTIONS", "/mcp"); self.assertEqual(code, 204); self.assertIn("Authorization", hdr["Access-Control-Allow-Headers"])
+
+    def test_tool_call_without_key_is_an_in_band_error(self):
+        sc, err, text = self.call("account"); self.assertTrue(err); self.assertIn("No API key", text); self.assertIn("Authorization: Bearer", text)
+        sc, err, text = self.call("account", key="mde_" + "f" * 32); self.assertTrue(err); self.assertIn("Invalid API key", text)
+        self.assertEqual(self.s.js("GET", "/v1/jobs", key="mde_" + "f" * 32)[0], 401)     # REST keeps its 401
+
+    def test_submit_inline_deck_runs_through_pod_flow(self):
+        full, kid = self.s.admin_key(20)
+        sc, err, _ = self.call("account", key=full); self.assertFalse(err); self.assertEqual((sc["balance_usd"], sc["key_id"], sc["runners"]), (20.0, kid, "open"))
+        files = {"in.lmp": "units metal\nread_data data.al\nrun 10\n", "data.al": "LAMMPS data\n"}
+        sc, err, text = self.call("submit_job", {"input": "in.lmp", "files": files, "label": "mcp", "estimate_s": 600, "gpu": "rtx4090"}, key=full)
+        self.assertFalse(err, text); jid = sc["id"]; self.assertRegex(jid, r"^MDJOB-\d{8}-[A-Z0-9]{6}$")
+        self.assertEqual((sc["state"], sc["files"], sc["gpu"]), ("queued", ["data.al", "in.lmp"], "rtx4090")); self.assertGreater(sc["deck_bytes"], 20)
+        # The pod pulls exactly the inline files as a tarball.
+        tok = self.launch_token(); spec = self.s.js("GET", f"/internal/jobs/{jid}", key=tok)[1]
+        self.assertEqual(spec["input"], "in.lmp")
+        with tarfile.open(fileobj=io.BytesIO(self.s.req("GET", spec["input_url"])[1]), mode="r:gz") as tf:
+            self.assertEqual(sorted(tf.getnames()), ["data.al", "in.lmp"]); self.assertEqual(tf.extractfile("in.lmp").read().decode(), files["in.lmp"])
+        self.s.js("POST", f"/internal/jobs/{jid}/heartbeat", body={"thermo_tail": ["Step Temp", "10 300"], "elapsed_s": 1}, key=tok)
+        sc, err, _ = self.call("job_status", {"id": jid}, key=full); self.assertFalse(err); self.assertEqual(sc["state"], "running"); self.assertEqual(sc["rate_usd_per_h"], 2.0)
+        sc, err, text = self.call("job_log", {"id": jid}, key=full); self.assertEqual(sc["thermo_tail"], ["Step Temp", "10 300"]); self.assertIn("10 300", text)
+        sc, err, text = self.call("job_results", {"id": jid}, key=full); self.assertTrue(err); self.assertIn("running", text)
+        self.s.req("PUT", spec["results_put_url"], raw=b"results-tarball")
+        self.s.js("POST", f"/internal/jobs/{jid}/done", body={"exitcode": 0, "elapsed_s": 36, "results_bytes": 15}, key=tok)
+        sc, err, _ = self.call("job_results", {"id": jid}, key=full); self.assertFalse(err); self.assertEqual(sc["bytes"], 15)
+        self.assertEqual(self.s.req("GET", sc["download_url"])[1], b"results-tarball")
+        sc, err, _ = self.call("list_jobs", {}, key=full); self.assertEqual([j["id"] for j in sc["jobs"]], [jid]); self.assertEqual(sc["jobs"][0]["cost_usd"], 0.02)
+        sc, err, text = self.call("cancel_job", {"id": jid}, key=full); self.assertTrue(err); self.assertIn("done", text)
+        self.assertEqual(self.s.js("GET", "/v1/me", key=full)[1]["balance_usd"], 19.98)     # REST sees the same billing
+        # Bad decks are refused before any job row exists; other keys cannot see the job.
+        for bad in ({"../x": "y", "in.lmp": "z"}, {"/abs": "y", "in.lmp": "z"}, {"other": "z"}, {}):
+            sc, err, text = self.call("submit_job", {"input": "in.lmp", "files": bad}, key=full); self.assertTrue(err, bad)
+        sc, err, text = self.call("submit_job", {"input": "in.lmp", "files": {"in.lmp": "x" * (E.mde_mcp.MAX_INLINE_BYTES + 1)}}, key=full)
+        self.assertTrue(err); self.assertIn("create_job", text)
+        self.assertEqual(len(self.s.js("GET", "/v1/jobs", key=full)[1]["jobs"]), 1)
+        other, _ = self.s.admin_key(5)
+        sc, err, text = self.call("job_status", {"id": jid}, key=other); self.assertTrue(err); self.assertIn("no job", text)
+        poor, _ = self.s.admin_key(0.1)
+        sc, err, text = self.call("submit_job", {"input": "in.lmp", "files": files}, key=poor); self.assertTrue(err); self.assertIn("insufficient balance", text)
+
+    def test_create_start_cancel_and_server_card(self):
+        full, _ = self.s.admin_key(20)
+        sc, err, _ = self.call("create_job", {"input": "in.lmp"}, key=full); self.assertFalse(err)
+        jid, up = sc["id"], sc["upload_url"]; self.assertIn("sig=", up); self.assertIn("start_job", sc["next"])
+        sc2, err, text = self.call("start_job", {"id": jid}, key=full); self.assertTrue(err); self.assertIn("created", text)
+        self.assertEqual(self.s.req("PUT", up, raw=b"deck")[0], 200)
+        sc2, err, _ = self.call("start_job", {"id": jid}, key=full); self.assertFalse(err); self.assertEqual(sc2["state"], "queued")
+        sc3, err, _ = self.call("cancel_job", {"id": jid}, key=full); self.assertFalse(err); self.assertEqual((sc3["state"], sc3["cost_usd"]), ("cancelled", 0.0))
+        self.assertEqual(self.s.js("GET", f"/v1/jobs/{jid}", key=full)[1]["state"], "cancelled")
+        code, card = self.s.js("GET", "/.well-known/mcp/server-card.json")
+        self.assertEqual(code, 200); self.assertEqual(card["name"], "com.forcefieldsilicon/mdengine")
+        self.assertEqual(card["remotes"][0], {"type": "streamable-http", "url": self.s.base + "/mcp",
+                                              "headers": [{"name": "Authorization", "description": card["remotes"][0]["headers"][0]["description"], "isRequired": True, "isSecret": True}]})
+        self.assertIn("2025-06-18", card["supportedProtocolVersions"])
+        # Closed runners: the MCP error carries the REST message.
+        self.s.app.cfg.runners_open = False
+        sc, err, text = self.call("create_job", {"input": "in.lmp"}, key=full); self.assertTrue(err); self.assertIn("never expire", text)
 
 class TestBlobRetention(Base):
     runners_open = True; fake_launcher = True

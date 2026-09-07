@@ -15,6 +15,8 @@ Evolved from hosted/mock/mock_endpoint.py: same routes and JSON shapes for the c
     unbilled; reaper enforces "a pod exists only while a job is launching/running" (CONTRACT.md, GJOB-099).
     Without the key `start` writes launch.env (dev).
   * Blob retention: deck/result tarballs are deleted MDE_BLOB_RETENTION_DAYS (30) after the job finished.
+  * POST /mcp                              MCP over Streamable HTTP (mde_mcp.py): same jobs, any MCP client
+  * GET  /.well-known/mcp/server-card.json  MCP discovery card (SEP-2127 draft)
 
 Runs behind Caddy (TLS) on 127.0.0.1:8080 under systemd; see deploy/ and README.md.
 
@@ -26,8 +28,9 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mde_launcher import RunPodLauncher, FakeLauncher, NoCapacity, LauncherError, parse_ladder, pod_age_s
+import mde_mcp
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 STATES = "created uploaded queued launching running uploading done failed cancelled".split()
 TERMINAL = ("done", "failed", "cancelled")
 NOT_BILLED_ERRORS = ("pod_lost", "no_capacity")
@@ -244,6 +247,7 @@ class App:
         self.last_reap = 0.0
         self.last_blob_purge = 0.0
         self._bg = []; self._bg_lock = threading.Lock()
+        self.mcp = mde_mcp.MCP(self)
 
     # -- background work (pod create/delete never blocks an HTTP response); join_bg() is for tests
     def spawn(self, target, *args):
@@ -316,6 +320,63 @@ class App:
     def purge_pending(self):
         cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - PENDING_KEY_TTL_S))
         self.db.x("delete from pending_keys where created < ?", cutoff)
+
+
+    # -- job operations shared by the REST routes and the MCP tools (one implementation, one billing path)
+    def create_job(self, k, spec):
+        """POST /v1/jobs. Returns (http_code, json). Validates spec, balance and the runners flag; reserves the id."""
+        db = self.db
+        if not isinstance(spec, dict) or "input" not in spec: return 400, {"error": "input required"}
+        gpu = spec.get("gpu", "any"); rate = self.cfg.rates.get(gpu)
+        if rate is None: return 400, {"error": "unknown gpu"}
+        runner = spec.get("runner")
+        if runner and runner not in self.cfg.runner_images:
+            return 400, {"error": "unknown runner", "message": "known runners: %s" % ", ".join(sorted(self.cfg.runner_images)) if self.cfg.runner_images else "no named runners configured"}
+        try: est = int(spec.get("estimate_s", 0)); wall = int(spec.get("wall_limit_s", 14400))
+        except (TypeError, ValueError): return 400, {"error": "bad numbers"}
+        if wall > 86400 or wall <= 0: return 400, {"error": "wall_limit_s must be 1..86400"}
+        if len(str(spec.get("label") or "")) > 120: return 400, {"error": "label too long"}
+        if db.balance(k["key_id"]) < rate * max(est, 900) / 3600: return 402, {"error": "insufficient balance"}
+        if not self.cfg.runners_open:
+            log("job.refused_closed", key_id=k["key_id"])
+            return 503, {"error": "gpu_runners_open_soon", "message": "GPU runners open this week; your credits are safe and never expire."}
+        jid = job_id()
+        spec["wall_limit_s"] = wall
+        db.x("insert into jobs(id,key_id,spec,state,created,gpu,rate) values(?,?,?,?,?,?,?)",
+             jid, k["key_id"], json.dumps(spec), "created", now(), gpu, rate)
+        url, exp = self.blob_url(f"{jid}.in.tar.gz", ttl=3600)
+        log("job.created", job=jid, key_id=k["key_id"], gpu=gpu)
+        return 201, {"id": jid, "gpu": gpu, "rate_usd_per_h": rate, "upload_url": url, "upload_expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp))}
+
+    def start_job(self, j):
+        """POST /v1/jobs/{id}/start. uploaded -> queued; mints the pod token and launches (or writes launch.env in dev)."""
+        if j["state"] != "uploaded": return 409, {"error": f"state is {j['state']}"}
+        tok = "jt_" + secrets.token_hex(16)                      # minted here, stored hashed, handed to the pod only
+        self.db.set_job(j["id"], state="queued", token_hash=sha256(tok))
+        spec = json.loads(j["spec"]); wall = int(spec.get("wall_limit_s") or 86400)
+        if self.launcher:                                        # background: queued -> launching | failed:no_capacity
+            self.spawn(self.launch_job, j["id"], tok, wall, j["gpu"])
+        else:                                                    # dev path: launch env on disk for a hand-run pod
+            with open(self.launch_env, "w", opener=lambda f, fl: os.open(f, fl, 0o600)) as fh:
+                fh.write(f"MDE_ENDPOINT={self.public_url}\nMDE_JOB_ID={j['id']}\nMDE_JOB_TOKEN={tok}\n")
+        log("job.queued", job=j["id"], key_id=j["key_id"], launcher=bool(self.launcher))
+        return 202, {"id": j["id"], "state": "queued"}
+
+    def cancel_job(self, j):
+        """DELETE /v1/jobs/{id}. Billed to cancel time if running; pod released by finish_job."""
+        if j["state"] in TERMINAL: return 409, {"error": "terminal", "message": f"job already {j['state']}"}
+        billed = billed_seconds(j) if j["state"] == "running" else 0
+        cur = self.finish_job(j, "job.cancelled", state="cancelled", finished=now(), error="cancelled", billed_s=billed, token_hash=None)
+        return 202, status(cur)
+
+    def job_results(self, j):
+        """GET /v1/jobs/{id}/results."""
+        if j["state"] not in ("done", "failed"): return 409, {"error": "not finished", "message": f"state is {j['state']}"}
+        f = self.blob_path(f"{j['id']}.out.tar.gz"); sz = os.path.getsize(f) if os.path.exists(f) else 0
+        if not sz and j["finished"] and parse_ts(j["finished"]) < time.time() - self.cfg.blob_retention_days * 86400:
+            return 410, {"error": "results expired", "retention_days": self.cfg.blob_retention_days}
+        url, exp = self.blob_url(f"{j['id']}.out.tar.gz")
+        return 200, {"download_url": url, "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp)), "bytes": sz}
 
     # -- pods: one per job, created after `start`, deleted at every terminal state
     def launch_job(self, jid, token, wall, gpu):
@@ -468,10 +529,12 @@ class Handler(BaseHTTPRequestHandler):
     app: App
     server_version = "mde-endpoint/" + VERSION; sys_version = ""
     def log_message(self, *a): pass
-    def send(self, code, obj=None, raw=None, ctype="application/json"):
+    def send(self, code, obj=None, raw=None, ctype="application/json", extra=None):
         body = raw if raw is not None else (json.dumps(obj).encode() if obj is not None else b"")
         self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
+        self.send_header("Cache-Control", "no-store")
+        for hk, hv in (extra or {}).items(): self.send_header(hk, hv)
+        self.end_headers(); self.wfile.write(body)
     def html(self, code, body): return self.send(code, raw=page(self.app.cfg.brand, body), ctype="text/html; charset=utf-8")
     def body(self):
         n = int(self.headers.get("Content-Length") or 0); return self.rfile.read(n) if n else b""
@@ -497,6 +560,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"ok": True, "version": VERSION, "runners": "open" if self.app.cfg.runners_open else "closed",
                                    "launcher": self.app.launcher.kind if self.app.launcher else "none"})
         if p == "/welcome": return self.welcome(parse_qs(u.query))
+        if p == "/.well-known/mcp/server-card.json": return self.send(200, self.app.mcp.server_card(), extra=mde_mcp.CORS)
+        if p == "/mcp": return self.send(405, {"error": "MCP over Streamable HTTP: POST JSON-RPC to this URL; no server-initiated stream"}, extra={"Allow": "POST, OPTIONS", **mde_mcp.CORS})
         if parts[1] == "blob" and len(parts) == 3:
             name = parts[2]
             if not self.app.blob_ok(name, u.query): return self.send(403, {"error": "bad or expired blob url"})
@@ -529,13 +594,7 @@ class Handler(BaseHTTPRequestHandler):
             j = db.job(parts[3])
             if not j or j["key_id"] != k["key_id"]: return self.send(404, {"error": "no job"})
             if len(parts) == 4: return self.send(200, status(j))
-            if parts[4] == "results":
-                if j["state"] not in ("done", "failed"): return self.send(409, {"error": "not finished"})
-                f = self.app.blob_path(f"{j['id']}.out.tar.gz"); sz = os.path.getsize(f) if os.path.exists(f) else 0
-                if not sz and j["finished"] and parse_ts(j["finished"]) < time.time() - self.app.cfg.blob_retention_days * 86400:
-                    return self.send(410, {"error": "results expired", "retention_days": self.app.cfg.blob_retention_days})
-                url, exp = self.app.blob_url(f"{j['id']}.out.tar.gz")
-                return self.send(200, {"download_url": url, "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp)), "bytes": sz})
+            if parts[4] == "results": return self.send(*self.app.job_results(j))
         self.send(404, {"error": "no route"})
 
     def admin(self, parts):
@@ -607,6 +666,7 @@ mdengine run --gpu in.lmp</pre>
     def do_POST(self):
         p = urlparse(self.path).path.rstrip("/"); parts = p.split("/"); db = self.app.db
         if p == "/v1/stripe/webhook": return self.webhook()
+        if p == "/mcp": return self.mcp()
         if parts[1] == "internal":                                   # pod side: heartbeat / done
             j = self.pod_job(parts[3]) if len(parts) == 5 and parts[2] == "jobs" else None
             if not j: return self.send(401, {"error": "bad token"})
@@ -631,41 +691,23 @@ mdengine run --gpu in.lmp</pre>
         if not k: return self.send(401, {"error": "bad api key"})
         if p == "/v1/jobs":
             spec = self.json_body()
-            if spec is None or "input" not in spec: return self.send(400, {"error": "input required"})
-            gpu = spec.get("gpu", "any"); rate = self.app.cfg.rates.get(gpu)
-            if rate is None: return self.send(400, {"error": "unknown gpu"})
-            runner = spec.get("runner")
-            if runner and runner not in self.app.cfg.runner_images:
-                return self.send(400, {"error": "unknown runner", "message": "known runners: %s" % ", ".join(sorted(self.app.cfg.runner_images)) if self.app.cfg.runner_images else "no named runners configured"})
-            try: est = int(spec.get("estimate_s", 0)); wall = int(spec.get("wall_limit_s", 14400))
-            except (TypeError, ValueError): return self.send(400, {"error": "bad numbers"})
-            if wall > 86400 or wall <= 0: return self.send(400, {"error": "wall_limit_s must be 1..86400"})
-            if len(str(spec.get("label") or "")) > 120: return self.send(400, {"error": "label too long"})
-            if db.balance(k["key_id"]) < rate * max(est, 900) / 3600: return self.send(402, {"error": "insufficient balance"})
-            if not self.app.cfg.runners_open:
-                log("job.refused_closed", key_id=k["key_id"])
-                return self.send(503, {"error": "gpu_runners_open_soon", "message": "GPU runners open this week; your credits are safe and never expire."})
-            jid = job_id()
-            spec["wall_limit_s"] = wall
-            db.x("insert into jobs(id,key_id,spec,state,created,gpu,rate) values(?,?,?,?,?,?,?)",
-                 jid, k["key_id"], json.dumps(spec), "created", now(), gpu, rate)
-            url, exp = self.app.blob_url(f"{jid}.in.tar.gz", ttl=3600)
-            log("job.created", job=jid, key_id=k["key_id"], gpu=gpu)
-            return self.send(201, {"id": jid, "upload_url": url, "upload_expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp))})
+            if spec is None: return self.send(400, {"error": "input required"})
+            return self.send(*self.app.create_job(k, spec))
         if len(parts) == 5 and parts[1] == "v1" and parts[2] == "jobs" and parts[4] == "start":
             j = db.job(parts[3])
             if not j or j["key_id"] != k["key_id"]: return self.send(404, {"error": "no job"})
-            if j["state"] != "uploaded": return self.send(409, {"error": f"state is {j['state']}"})
-            tok = "jt_" + secrets.token_hex(16)                      # minted here, stored hashed, handed to the pod only
-            db.set_job(j["id"], state="queued", token_hash=sha256(tok))
-            spec = json.loads(j["spec"]); wall = int(spec.get("wall_limit_s") or 86400)
-            if self.app.launcher:                                    # background: queued -> launching | failed:no_capacity
-                self.app.spawn(self.app.launch_job, j["id"], tok, wall, j["gpu"])
-            else:                                                    # dev path: launch env on disk for a hand-run pod
-                with open(self.app.launch_env, "w", opener=lambda f, fl: os.open(f, fl, 0o600)) as fh:
-                    fh.write(f"MDE_ENDPOINT={self.app.public_url}\nMDE_JOB_ID={j['id']}\nMDE_JOB_TOKEN={tok}\n")
-            log("job.queued", job=j["id"], key_id=k["key_id"], launcher=bool(self.app.launcher))
-            return self.send(202, {"id": j["id"], "state": "queued"})
+            return self.send(*self.app.start_job(j))
+        self.send(404, {"error": "no route"})
+
+    def mcp(self):
+        raw = self.body()
+        if len(raw) > mde_mcp.MAX_BODY: return self.send(413, {"error": "body too large"}, extra=mde_mcp.CORS)
+        code, obj = self.app.mcp.handle(raw, key=self.api_key(), bearer=self.bearer())
+        return self.send(code, obj, extra=mde_mcp.CORS)
+
+    def do_OPTIONS(self):
+        p = urlparse(self.path).path.rstrip("/")
+        if p in ("/mcp", "/.well-known/mcp/server-card.json"): return self.send(204, extra={"Access-Control-Max-Age": "86400", **mde_mcp.CORS})
         self.send(404, {"error": "no route"})
 
     def webhook(self):
@@ -691,15 +733,13 @@ mdengine run --gpu in.lmp</pre>
     # ------------------------------------------------------------------ DELETE (cancel)
     def do_DELETE(self):
         parts = urlparse(self.path).path.rstrip("/").split("/"); db = self.app.db
+        if parts[1:] == ["mcp"]: return self.send(405, {"error": "stateless MCP server: no sessions to delete"}, extra={"Allow": "POST, OPTIONS", **mde_mcp.CORS})
         k = self.api_key()
         if not k: return self.send(401, {"error": "bad api key"})
         if len(parts) != 4 or parts[1] != "v1" or parts[2] != "jobs": return self.send(404, {"error": "no route"})
         j = db.job(parts[3])
         if not j or j["key_id"] != k["key_id"]: return self.send(404, {"error": "no job"})
-        if j["state"] in TERMINAL: return self.send(409, {"error": "terminal"})
-        billed = billed_seconds(j) if j["state"] == "running" else 0
-        cur = self.app.finish_job(j, "job.cancelled", state="cancelled", finished=now(), error="cancelled", billed_s=billed, token_hash=None)
-        self.send(202, status(cur))
+        self.send(*self.app.cancel_job(j))
 
 # ----------------------------------------------------------------------------- server
 

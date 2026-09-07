@@ -163,3 +163,22 @@ Presigned object-storage (R2) URLs — blobs live on the box behind signed URLs.
 walked at create time (a rung that refuses moves to the next one immediately); a pod that is accepted but never
 heartbeats is not moved to the next rung: it is relaunched once through the whole ladder (attempt 2), then times out
 to `failed:no_capacity`.
+
+## MCP over Streamable HTTP (`mde_mcp.py`)
+
+`POST /mcp` is a stateless MCP server (JSON responses, no SSE, no sessions) exposing the job API
+as tools; `GET /.well-known/mcp/server-card.json` advertises it. Auth is the same
+`Authorization: Bearer mde_…`; `initialize`/`ping`/`tools/list` are open, `tools/call` without a
+valid key returns an in-band `isError` result (deliberately not HTTP 401, which makes clients
+start an OAuth flow we do not offer). Tools call `App.create_job/start_job/cancel_job/job_results`
+— the same methods the REST routes use, so billing cannot diverge. `submit_job` builds the deck
+tarball from inline text files (≤ 8 MB) and writes it straight into the blob store.
+
+Smoke test against production:
+
+```sh
+curl -s https://api.forcefieldsilicon.com/mcp -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools[].name'
+curl -s https://api.forcefieldsilicon.com/mcp -H "Authorization: Bearer $MDE_KEY" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"account","arguments":{}}}'
+```

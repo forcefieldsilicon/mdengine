@@ -37,6 +37,7 @@ echo "== files"
 install -o root -g root -m 755 "$SRC/mde_endpoint.py" /opt/mde/mde_endpoint.py
 install -o root -g root -m 755 "$SRC/mde_admin.py" /opt/mde/mde_admin.py
 install -o root -g root -m 644 "$SRC/mde_launcher.py" /opt/mde/mde_launcher.py
+install -o root -g root -m 644 "$SRC/mde_mcp.py" /opt/mde/mde_mcp.py
 ln -sf /opt/mde/mde_admin.py /usr/local/bin/mde-admin
 install -o root -g root -m 644 "$HERE/mde-endpoint.service" /etc/systemd/system/mde-endpoint.service
 install -o root -g root -m 755 "$HERE/mde-backup.sh" /opt/mde/mde-backup.sh
