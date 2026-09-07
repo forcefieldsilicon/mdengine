@@ -1,0 +1,110 @@
+{
+  "manifest_version": "0.3",
+  "name": "mdengine",
+  "display_name": "MDEngine",
+  "version": "0.6.2",
+  "description": "Inspect, render and analyse molecular-dynamics trajectories and run LAMMPS jobs as detached background work.",
+  "long_description": "MDEngine's MCP server gives an AI agent a molecular-dynamics workbench on macOS: trajectory inspection (XYZ, extended-XYZ, LAMMPS dump), deposition/oxidation depth profiles, Metal-rendered PNG frames and MP4/GIF videos so the agent can *see* a simulation, frame export and decimation, and a detached LAMMPS job runner (submit, status, log tail, files, cancel) that survives the server exiting and display sleep. Optional remote hosts over ssh and the paid ForceField Silicon GPU tier. Simulation decks are programs: a submitted deck runs with your user's privileges \u2014 read decks before running them.",
+  "author": {
+    "name": "ForceField Silicon (Gitinama Inc.)",
+    "url": "https://forcefieldsilicon.com"
+  },
+  "homepage": "https://forcefieldsilicon.com/mdengine",
+  "documentation": "https://github.com/forcefieldsilicon/mdengine#mcp-server",
+  "support": "https://github.com/forcefieldsilicon/mdengine/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/forcefieldsilicon/mdengine"
+  },
+  "license": "MIT",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/mdengine-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/mdengine-mcp",
+      "args": [],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "trajectory_info",
+      "description": "Inspect an MD trajectory (XYZ / extended-XYZ or native LAMMPS dump; safe on in-flight dumps still being written \u2014 reports complete frames): frame count, atoms per frame, element histogram of the last frame, bounding box in \u00c5."
+    },
+    {
+      "name": "z_profile",
+      "description": "Depth analysis of a deposition/oxidation trajectory: locates the substrate's top surface plane along z (mean z of the top 5% of substrate atoms), then reports probe-atom penetration depths below it, at-surface and in-flight counts, mean bound-probe charge (when the dump has q), and a z histogram relative to the surface. Defaults: substrate = most abundant element, probe = second."
+    },
+    {
+      "name": "render_video",
+      "description": "Render a trajectory into an MP4 (H.264) or animated GIF via the same Metal renderer the app uses. Annotations (scale bar + frame counter) baked by default. Camera defaults to the home view; pass yaw/pitch degrees to frame the shot (front view of a z-up slab: pitch -90). Stride defaults to ~15 s of video. Synchronous \u2014 a long trajectory at 4K can take minutes."
+    },
+    {
+      "name": "render_image",
+      "description": "Render ONE trajectory frame to a PNG through the same Metal renderer \u2014 lets an agent SEE a simulation state. Same camera/style/annotation arguments as render_video; frame selects which snapshot."
+    },
+    {
+      "name": "export_frame",
+      "description": "Write one frame of a trajectory to a new plain-XYZ file."
+    },
+    {
+      "name": "decimate",
+      "description": "Keep every Nth frame of a trajectory (the final frame is always kept). Use to shrink huge trajectories before viewing."
+    },
+    {
+      "name": "submit_lammps",
+      "description": "Submit a LAMMPS input script as a DETACHED background job \u2014 locally (keeps the machine awake, survives this server exiting, records its exit code) or on a configured REMOTE host (~/.mdengine/hosts.json: the deck's directory is rsynced up, minus trajectories/checkpoints/logs, and LAMMPS runs there under nohup with its exit code recorded remotely; a GPU box is just a host whose launch template carries the KOKKOS flags). host='cloud' sends the deck to the hosted GPU tier (RTX 4090, KOKKOS; prepaid credits at $2/GPU-h, API key from `mdengine login`) \u2014 same job tools, results come back with fetch_job. Runs in the input's own directory so relative data/potential paths work; a remote deck must be self-contained within that directory. Returns a job id \u2014 poll with job_status; for remote jobs, fetch_job pulls results back."
+    },
+    {
+      "name": "list_hosts",
+      "description": "List the execution hosts configured in ~/.mdengine/hosts.json (ssh target, remote LAMMPS, workdir, launch template) and which is the default."
+    },
+    {
+      "name": "fetch_job",
+      "description": "Pull a REMOTE job's outputs (its run directory: dumps, data files, plus log.lammps/stdout.log) back into the local job dir under results/, so trajectory_info / z_profile / render_* can read them. Safe to call while the job is still running (partial dumps parse to complete frames)."
+    },
+    {
+      "name": "job_status",
+      "description": "State of a submitted job (running / done / FAILED / vanished) plus the latest thermo lines from its LAMMPS log."
+    },
+    {
+      "name": "job_log",
+      "description": "Tail of a job's LAMMPS log (thermo output, errors)."
+    },
+    {
+      "name": "list_jobs",
+      "description": "List all submitted LAMMPS jobs and their states."
+    },
+    {
+      "name": "job_files",
+      "description": "List the files a job produced: contents of its run directory (where dumps/logs land per the deck) and its bookkeeping dir, with sizes. Use after job_status says done to locate the output trajectory."
+    },
+    {
+      "name": "cancel_job",
+      "description": "Terminate a running job (SIGTERM to LAMMPS and its wrapper)."
+    },
+    {
+      "name": "run_lammps",
+      "description": "Run a SHORT LAMMPS input synchronously and return the output tail. Blocks the call \u2014 for anything longer than ~a minute use submit_lammps instead."
+    }
+  ],
+  "keywords": [
+    "molecular-dynamics",
+    "lammps",
+    "trajectory",
+    "simulation",
+    "materials",
+    "chemistry",
+    "rendering",
+    "macos"
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin"
+    ]
+  },
+  "privacy_policies": [
+    "https://github.com/forcefieldsilicon/mdengine/blob/main/PRIVACY.md"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.forcefieldsilicon/mdengine",
+  "title": "MDEngine",
+  "description": "Molecular-dynamics workbench for agents: inspect and render trajectories, depth profiles, and run LAMMPS jobs detached (local, ssh, or hosted GPU).",
+  "repository": { "url": "https://github.com/forcefieldsilicon/mdengine", "source": "github" },
+  "websiteUrl": "https://forcefieldsilicon.com/mdengine",
+  "version": "0.6.2",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/forcefieldsilicon/mdengine/releases/download/v0.6.2/mdengine-mcp-0.6.2-macos-arm64.mcpb",
+      "fileSha256": "d51e2ac7ce15c1f51060a5c5341e965426698933802fc23cd460e9ee1d20a72f",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

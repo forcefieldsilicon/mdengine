@@ -352,6 +352,36 @@ let toolDefs: [[String: Any]] = [
                      "required": ["input"]]],
 ]
 
+// MARK: - Tool metadata (MCP `title` + behaviour annotations, merged into tools/list)
+// Annotations follow the MCP spec: readOnlyHint = no environment mutation;
+// destructiveHint = may delete/overwrite/terminate; idempotentHint; openWorldHint = talks
+// to hosts beyond this machine. Directory listings (e.g. Anthropic's) require them.
+private func ann(_ readOnly: Bool, destructive: Bool = false, idempotent: Bool = false, openWorld: Bool = false) -> [String: Any] {
+    ["readOnlyHint": readOnly, "destructiveHint": destructive, "idempotentHint": idempotent, "openWorldHint": openWorld]
+}
+let toolMeta: [String: [String: Any]] = [
+    "trajectory_info": ["title": "Trajectory info",        "annotations": ann(true, idempotent: true)],
+    "z_profile":       ["title": "Depth (z) profile",      "annotations": ann(true, idempotent: true)],
+    "render_video":    ["title": "Render trajectory video","annotations": ann(false, idempotent: true)],
+    "render_image":    ["title": "Render frame image",     "annotations": ann(false, idempotent: true)],
+    "export_frame":    ["title": "Export frame to XYZ",    "annotations": ann(false, idempotent: true)],
+    "decimate":        ["title": "Decimate trajectory",    "annotations": ann(false, idempotent: true)],
+    "submit_lammps":   ["title": "Submit LAMMPS job",      "annotations": ann(false, openWorld: true)],
+    "list_hosts":      ["title": "List execution hosts",   "annotations": ann(true, idempotent: true)],
+    "fetch_job":       ["title": "Fetch remote job outputs","annotations": ann(false, idempotent: true, openWorld: true)],
+    "job_status":      ["title": "Job status",             "annotations": ann(true, idempotent: true, openWorld: true)],
+    "job_log":         ["title": "Job log tail",           "annotations": ann(true, idempotent: true, openWorld: true)],
+    "list_jobs":       ["title": "List jobs",              "annotations": ann(true, idempotent: true)],
+    "job_files":       ["title": "List job files",         "annotations": ann(true, idempotent: true, openWorld: true)],
+    "cancel_job":      ["title": "Cancel job",             "annotations": ann(false, destructive: true, idempotent: true, openWorld: true)],
+    "run_lammps":      ["title": "Run LAMMPS (blocking)",  "annotations": ann(false, openWorld: true)],
+]
+let toolList: [[String: Any]] = toolDefs.map { def in
+    var d = def
+    if let name = def["name"] as? String, let extra = toolMeta[name] { extra.forEach { d[$0.key] = $0.value } }
+    return d
+}
+
 // MARK: - Render helpers (render_video / render_image)
 
 let namedColors: [String: SIMD3<Float>] = [
@@ -746,11 +776,11 @@ while let line = readLine(strippingNewline: true) {
         let version = params?["protocolVersion"] as? String ?? "2025-06-18"
         reply(id, ["protocolVersion": version,
                    "capabilities": ["tools": [String: Any]()],
-                   "serverInfo": ["name": "mdengine", "version": "0.6.1"]])
+                   "serverInfo": ["name": "mdengine", "version": "0.6.2"]])
     case "ping":
         reply(id, [:])
     case "tools/list":
-        reply(id, ["tools": toolDefs])
+        reply(id, ["tools": toolList])
     case "tools/call":
         let params = msg["params"] as? [String: Any] ?? [:]
         let name = params["name"] as? String ?? ""

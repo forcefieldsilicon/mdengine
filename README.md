@@ -44,7 +44,13 @@ MDEngine derives it from the LAMMPS install.
 
 ## MCP server
 
-`mdengine-mcp` is a dependency-free MCP stdio server. Register with Claude Code:
+`mdengine-mcp` is a dependency-free MCP stdio server, listed in the
+[MCP Registry](https://registry.modelcontextprotocol.io) as
+`com.forcefieldsilicon/mdengine` (`server.json` in this repo). Each release ships a
+signed macOS [MCP Bundle](https://github.com/modelcontextprotocol/mcpb)
+(`mdengine-mcp-<version>-macos-arm64.mcpb`): double-click it to install in Claude
+Desktop, or unpack it (`mcpb unpack`) for any other client. Built from source, register
+with Claude Code:
 
 ```sh
 claude mcp add mdengine /path/to/.build/release/mdengine-mcp
@@ -126,6 +132,11 @@ dev tool (an agent that can run `make` can run anything), but be deliberate
 about which decks — and which agents — you hand to the job runner. Sandboxed
 execution (containers, no network, resource caps) is how a future hosted tier
 makes running untrusted decks safe; the local server does not sandbox.
+
+## Privacy
+
+The local tools collect nothing; see [PRIVACY.md](PRIVACY.md), which also covers the
+hosted GPU tier.
 
 ## License
 
