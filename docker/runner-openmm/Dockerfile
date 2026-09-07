@@ -13,7 +13,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 # openmm + the module-1 toolchain: forcefields (CHARMM36m/Amber via openmmforcefields), structure
 # repair (pdbfixer), trajectory analysis (mdtraj, mdanalysis). cuda-version MUST be pinned to the floor the
 # launcher promises (MDE_MIN_CUDA=12.4): a newer nvrtc emits PTX the host driver cannot JIT
-# (CUDA_ERROR_UNSUPPORTED_PTX_VERSION, seen live 2026-09-07 with cuda-version=12.* on a 570 driver).
+# (CUDA_ERROR_UNSUPPORTED_PTX_VERSION, seen live 2026-09-07 with cuda-version=12.* on a 550.127 (CUDA 12.4) driver).
 RUN micromamba install -y -n base -c conda-forge \
       python=3.11 openmm=8.* "cuda-version=12.4.*" openmmforcefields pdbfixer mdtraj mdanalysis numpy scipy \
  && micromamba clean -ay
