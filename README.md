@@ -87,6 +87,19 @@ custom connectors, Cursor, Goose — via the hosted endpoint's Streamable HTTP s
 claude mcp add --transport http mdengine-cloud https://api.forcefieldsilicon.com/mcp
 ```
 
+**Windows and Linux.** The hosted tier is the supported path on both, and it is the full paid
+product: every tool below works from Claude Code on Windows exactly as on a Mac. In PowerShell,
+register at user scope so the server follows you into every folder, then sign in once:
+
+```powershell
+claude mcp add --scope user --transport http mdengine-cloud https://api.forcefieldsilicon.com/mcp
+```
+
+Start `claude`, type `/mcp`, pick `mdengine-cloud`, choose Authenticate, and paste the key on the
+browser consent page (never into the chat). Decks written on Windows (CRLF line endings) are
+accepted as-is. The local viewer, renderer and CPU job runner are macOS-only today; a Windows/Linux
+local build is planned and demand decides its order, so say so if you need it.
+
 Sign in when the client asks (OAuth 2.1: a consent page where you paste your API key once; the
 client keeps a token, the key stays with you). Scripted clients may instead send the key directly
 as `--header "Authorization: Bearer mde_YOUR_KEY"`. The key comes with a prepaid credit pack
