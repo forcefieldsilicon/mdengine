@@ -34,6 +34,9 @@ public final class OffscreenRenderer {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
+    /// Second pipeline for bond/backbone line primitives; shares the depth
+    /// state and the uniform layout with the point pipeline.
+    private let linePipeline: MTLRenderPipelineState
     private let depthState: MTLDepthStencilState
     private let colorTexture: MTLTexture
     private let depthTexture: MTLTexture
@@ -87,6 +90,17 @@ public final class OffscreenRenderer {
         guard let pipeline = try? device.makeRenderPipelineState(descriptor: descriptor) else { return nil }
         self.pipeline = pipeline
 
+        guard let lineLibrary = try? device.makeLibrary(source: RenderCore.lineShaderSource, options: nil),
+              let lineVertex = lineLibrary.makeFunction(name: "line_vertex_main"),
+              let lineFragment = lineLibrary.makeFunction(name: "line_fragment_main") else { return nil }
+        let lineDescriptor = MTLRenderPipelineDescriptor()
+        lineDescriptor.vertexFunction = lineVertex
+        lineDescriptor.fragmentFunction = lineFragment
+        lineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        lineDescriptor.depthAttachmentPixelFormat = .depth32Float
+        guard let linePipeline = try? device.makeRenderPipelineState(descriptor: lineDescriptor) else { return nil }
+        self.linePipeline = linePipeline
+
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .less
         depthDescriptor.isDepthWriteEnabled = true
@@ -109,13 +123,46 @@ public final class OffscreenRenderer {
 
     public var frameCount: Int { frames.count }
 
+    private func clampedIndex(_ i: Int) -> Int { max(0, min(frames.count - 1, i)) }
+
+    /// A frame's atom positions in the renderer's normalized model space —
+    /// what `RenderCore.lineVertices` needs so bonds land on the atoms.
+    public func modelPositions(frameIndex: Int) -> [SIMD3<Float>] {
+        frames[clampedIndex(frameIndex)].map {
+            (SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z)) - center) * scale
+        }
+    }
+
+    /// The colour each atom is drawn with: the override when it matches the
+    /// frame atom-for-atom, otherwise the element style. Half-bonds take
+    /// their colours from here, so a bond under an overlay is coloured by the
+    /// overlay too.
+    public func atomColors(frameIndex: Int, override: [SIMD3<Float>]? = nil) -> [SIMD3<Float>] {
+        let frame = frames[clampedIndex(frameIndex)]
+        if let override, override.count == frame.count { return override }
+        return frame.map { style.color(for: $0.element) }
+    }
+
     /// Render one trajectory frame; returns width*height*4 BGRA bytes, row 0 = top.
-    public func renderBGRA(frameIndex: Int, camera: Camera) -> [UInt8]? {
+    ///
+    /// `colors`, when non-nil and exactly as long as the frame's atom count,
+    /// replaces the element style colour atom-for-atom (sizes are untouched).
+    /// Any other count is ignored — a field of the wrong length must never be
+    /// misattributed to the wrong atoms.
+    ///
+    /// `lines` are bond/backbone vertex pairs already in model space (build
+    /// them with `modelPositions` + `RenderCore.lineVertices`); they are drawn
+    /// after the atoms, against the same depth buffer.
+    public func renderBGRA(frameIndex: Int, camera: Camera,
+                           colors: [SIMD3<Float>]? = nil,
+                           lines: [RenderCore.LineVertex]? = nil) -> [UInt8]? {
         let i = max(0, min(frames.count - 1, frameIndex))
-        let gpuAtoms: [RenderCore.RenderAtom] = frames[i].map { a in
+        let frame = frames[i]
+        let override = (colors?.count == frame.count) ? colors : nil
+        let gpuAtoms: [RenderCore.RenderAtom] = frame.enumerated().map { n, a in
             let p = SIMD3<Float>(Float(a.x), Float(a.y), Float(a.z))
             return RenderCore.RenderAtom(position: (p - center) * scale,
-                                         color: style.color(for: a.element),
+                                         color: override?[n] ?? style.color(for: a.element),
                                          size: style.size(for: a.element))
         }
         guard !gpuAtoms.isEmpty,
@@ -157,6 +204,17 @@ public final class OffscreenRenderer {
         encoder.setVertexBuffer(atomBuffer, offset: 0, index: 0)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<RenderCore.Uniforms>.stride, index: 1)
         encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: gpuAtoms.count)
+
+        if let lines, !lines.isEmpty,
+           let lineBuffer = device.makeBuffer(
+            bytes: lines,
+            length: MemoryLayout<RenderCore.LineVertex>.stride * lines.count,
+            options: []) {
+            encoder.setRenderPipelineState(linePipeline)
+            encoder.setVertexBuffer(lineBuffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<RenderCore.Uniforms>.stride, index: 1)
+            encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: lines.count & ~1)
+        }
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()

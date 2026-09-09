@@ -2,13 +2,13 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.forcefieldsilicon/mdengine",
   "title": "MDEngine",
-  "description": "MD workbench for agents: inspect/render trajectories, depth profiles, detached LAMMPS jobs.",
+  "description": "MD workbench for agents: 13 analysis tools, renders, hosted GPU runs; LAMMPS + OpenMM.",
   "repository": {
     "url": "https://github.com/forcefieldsilicon/mdengine",
     "source": "github"
   },
   "websiteUrl": "https://forcefieldsilicon.com/mdengine",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "remotes": [
     {
       "type": "streamable-http",
@@ -26,8 +26,8 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/forcefieldsilicon/mdengine/releases/download/v0.6.3/mdengine-mcp-0.6.3-macos-arm64.mcpb",
-      "fileSha256": "2f490de84f65ed553f6190ba55525daedec120490f9b1ff8549a8d5c7920ac06",
+      "identifier": "https://github.com/forcefieldsilicon/mdengine/releases/download/v0.7.0/mdengine-mcp-0.7.0-macos-arm64.mcpb",
+      "fileSha256": "b5ee7534d0235e68d42ff63e73e735857aabb19b3e0c9f08579e79051da646a0",
       "transport": {
         "type": "stdio"
       }

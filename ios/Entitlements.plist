@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Why this file exists: the iOS Keychain refuses SecItemAdd/Update from a bundle with no
+	  application-identifier, because such a bundle has no keychain scope to write into. The app reports it
+	  as "A required entitlement isn't present" (errSecMissingEntitlement, -34018). An unsigned
+	  hand-assembled bundle is exactly that case, so scripts/make_ios_app.sh ad-hoc signs with these keys.
+
+	  The ABCDE12345 prefix stands in for a team id. Xcode writes TEAMID.bundle-id here. The Simulator
+	  does not verify the prefix against Apple, but it does reject a bare bundle id: SBMainWorkspace denies
+	  the launch and the install record reads identity Invalid. A real signed build for TestFlight
+	  (GJOB-124) replaces the placeholder prefix with the actual team id, at which point Xcode supplies both keys and
+	  this file is only for the simulator path.
+
+	  Keep this file plain ASCII with no angle brackets in comments: codesign parses it with
+	  AMFIUnserializeXML, which is stricter than plutil and reads a bracketed word in a comment as a tag.
+	-->
+	<key>application-identifier</key>
+	<string>ABCDE12345.com.forcefieldsilicon.mdengine.runs</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>ABCDE12345.com.forcefieldsilicon.mdengine.runs</string>
+	</array>
+</dict>
+</plist>

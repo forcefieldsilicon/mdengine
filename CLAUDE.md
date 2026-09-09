@@ -6,7 +6,11 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
 (Gitinama Inc.).
 
 ## Commands
-- Build: `swift build` · Tests: `swift test` (20 cases, keep green)
+- Build: `swift build` · Tests: `swift test` (43 cases, keep green)
+- PUBLIC REPO = open core (arvand 2026-09-09): app/CLI/MCP are MIT; `hosted/` (endpoint, OAuth, launcher,
+  deploy, pricing) is NEVER published. Releases go out as one squash snapshot built by
+  `scripts/public_snapshot.sh <v>` (excludes hosted/ + runner-manifest.yml) onto branch `public-main`,
+  pushed by arvand via ~/LAMMPSApp/scripts/release_publish.sh. Never `git push public main`.
 - Release: `swift build -c release` — **ALWAYS run after changes**:
   `/opt/homebrew/bin/mdengine` and `mdengine-mcp` are symlinks into
   `.build/release/`; a debug-only build leaves every other session running
@@ -31,7 +35,7 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
   `/.well-known/*` MUST 404 (a 401 there makes Claude.ai demand OAuth it can't find); tools/call
   without a credential = 401 + WWW-Authenticate resource_metadata. Directory portal reads the
   tool title from `annotations.title` and the icon from `/favicon.ico`. Deploy to prod
-  (`deploy/deploy.sh root@mde-api`) is arvand-only (classifier); 57 tests in test_endpoint.py.
+  (`deploy/deploy.sh root@mde-api`) is arvand-only (classifier); 101 tests in test_endpoint.py.
 - Notarize bare binaries as a zip (`NOTARY_PROFILE=mdengine-notary`); tickets are online-only.
 - Hosted GPU tier (`Sources/LAMMPSCore/HostedClient.swift`, `hosted/CONTRACT.md`): dev
   loop = `python3 hosted/mock/mock_endpoint.py --port 8788 --data <dir>` +
@@ -49,6 +53,11 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
   ignore) and drop non-finite rows — tests cover both; don't regress.
 
 ## Rules
+- **Skills are part of the tool.** Every analysis tool has `skills/tools/<id>/SKILL.md` (user-session
+  playbook) and a manual section `<h2><id> — Title</h2>` in docs/manual/html/tools.html; any change to a
+  tool's parameters, outputs or method updates both in the same commit. `ToolSkillsTests` fails the
+  build when a default parameter key is missing from the skill or the manual section is absent. New
+  subject knowledge (methods, scaling rules, caveats) goes into `skills/<subject>/SKILL.md`.
 - Sim decks are programs (LAMMPS `shell`): keep the README security note intact.
 - Landauer/thermodynamic accounting stays out of this codebase (research-side
   layer separation).

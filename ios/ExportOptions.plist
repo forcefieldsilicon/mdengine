@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Export options for turning MDEngineRuns.xcarchive into an App Store .ipa:
+
+	      xcodebuild -exportArchive \
+	        -archivePath <archive> -exportPath <dir> -exportOptionsPlist ios/ExportOptions.plist
+
+	  Only useful once an archive exists. Producing the archive needs Xcode's GUI at least once, because
+	  xcodebuild's provisioning cache resolves only the Personal Team even when the GUI has Gitinama Inc.
+	  (see docs/app-store-readiness.md).
+
+	  uploadSymbols is on so crash reports come back symbolicated. There is no bitcode key: Apple removed
+	  bitcode entirely, and including it now is an error rather than a no-op.
+	-->
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>teamID</key>
+	<string>6CVRWYN3A9</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<!-- Export the .ipa to disk rather than uploading straight from the command line: the upload is an
+	     outward-facing action and stays a deliberate, separate step. -->
+	<key>destination</key>
+	<string>export</string>
+</dict>
+</plist>

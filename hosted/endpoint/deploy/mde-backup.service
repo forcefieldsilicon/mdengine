@@ -1,7 +1,0 @@
-[Unit]
-Description=MDEngine ledger sqlite backup
-[Service]
-Type=oneshot
-User=mde
-EnvironmentFile=/etc/mde/endpoint.env
-ExecStart=/opt/mde/mde-backup.sh

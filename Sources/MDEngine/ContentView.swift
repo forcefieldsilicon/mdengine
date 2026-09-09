@@ -4,8 +4,10 @@ import MDRender
 
 struct ContentView: View {
     @ObservedObject var model: ContentViewModel
+    @Environment(\.openWindow) private var openWindow
     @AppStorage("showScaleBar") private var showScaleBar = true
     @AppStorage("pane1ScaleBar") private var pane1ScaleBar = true
+    @AppStorage("showPerfHUD") private var showPerfHUD = false
     @AppStorage("paneCount") private var paneCount = 1
     @AppStorage("pane2Preset") private var pane2Preset = "top"
     @AppStorage("pane3Preset") private var pane3Preset = "left"
@@ -50,9 +52,15 @@ struct ContentView: View {
         }
         .navigationTitle(model.sourceName.isEmpty ? "MDEngine" : model.sourceName)
         .toolbar {
-            // Top-right, Xcode-style: full-size toolbar button with the system
-            // rounded background, instead of a small icon buried in the status bar.
-            ToolbarItem(placement: .primaryAction) {
+            // Top-right, Xcode-style: full-size toolbar buttons with the system
+            // rounded background, instead of small icons buried in the status bar.
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    openWindow(id: "hosted")
+                } label: {
+                    Label("Accelerated Runs", systemImage: "bolt.fill")
+                }
+                .help("Hosted GPU runs: submit a deck, watch it live, open its results (also File ▸ Run Accelerated…)")
                 Button {
                     model.showInspector.toggle()
                 } label: {
@@ -62,7 +70,7 @@ struct ContentView: View {
             }
         }
         .inspector(isPresented: $model.showInspector) {
-            InspectorView(model: model)
+            HostedInspector(model: model)
                 .inspectorColumnWidth(min: 320, ideal: 340, max: 460)
         }
         .onAppear {
@@ -122,7 +130,14 @@ struct ContentView: View {
                   cameraResetToken: model.cameraResetToken,
                   preset: model.pendingViewPreset,
                   presetToken: model.viewPresetToken,
-                  styleGeneration: model.styleGeneration)
+                  styleGeneration: model.styleGeneration,
+                  overlayGeneration: model.overlayGeneration,
+                  overlayProvider: { [weak model] in model?.overlayColors },
+                  bondsGeneration: model.bondsGeneration,
+                  bondsProvider: { [weak model] in model?.bondsForRenderer() })
+            .overlay(alignment: .bottomTrailing) {
+                OverlayLegendView(state: model.inspector).padding(12)
+            }
             .overlay(alignment: .bottomLeading) {
                 if showScaleBar && pane1ScaleBar && !model.atoms.isEmpty {
                     GeometryReader { geo in
@@ -135,6 +150,9 @@ struct ContentView: View {
             }
             .overlay(alignment: .topTrailing) {
                 if !model.atoms.isEmpty { viewMenu.padding(10) }
+            }
+            .overlay(alignment: .topLeading) {
+                if showPerfHUD { PerfHUDView(model: model).padding(10) }
             }
     }
 
@@ -175,17 +193,12 @@ struct ContentView: View {
 
     private var summaryBar: some View {
         let total = model.atoms.count
-        var histogram: [String: Int] = [:]
-        for a in model.atoms { histogram[a.element, default: 0] += 1 }
-        let top: [(String, Int)] = histogram.sorted {
-            ($0.value, $1.key) > ($1.value, $0.key)   // by count desc, name asc
-        }.prefix(3).map { ($0.key, $0.value) }
+        // Element counts come from the model's off-main "elements" lane —
+        // this body runs on every playback tick, so it must not touch atoms
+        // (the histogram here was ~10 % of main-thread time at 100 k atoms).
         return HStack(spacing: 16) {
             Text("\(total) atoms").bold()
-            ForEach(top.indices, id: \.self) { i in
-                Label("\(top[i].1) \(top[i].0)", systemImage: "circle.fill")
-                    .foregroundColor(ElementColors.color(for: top[i].0))
-            }
+            ElementSummary(state: model.inspector)
             Spacer()
             if model.isFollowingFile {
                 Label("live", systemImage: "dot.radiowaves.left.and.right")
@@ -229,6 +242,10 @@ private struct ExtraPaneView: View {
                   cameraResetToken: model.cameraResetToken,
                   preset: pane.preset,
                   styleGeneration: model.styleGeneration,
+                  overlayGeneration: model.overlayGeneration,
+                  overlayProvider: { [weak model] in model?.overlayColors },
+                  bondsGeneration: model.bondsGeneration,
+                  bondsProvider: { [weak model] in model?.bondsForRenderer() },
                   scaleSink: paneScale)
             .overlay(alignment: .topLeading) {
                 Text(pane.preset?.label ?? "Free")
@@ -329,6 +346,21 @@ struct TrajectoryScrubber: View {
             .accessibilityElement()
             .accessibilityLabel("Trajectory timeline")
             .accessibilityValue("frame \(index + 1) of \(frameCount)")
+        }
+    }
+}
+
+/// Top-3 element counts in the summary bar. Observes InspectorState (where
+/// the off-main "elements" lane publishes), so it updates when the counts
+/// change and not on every playback tick.
+private struct ElementSummary: View {
+    @ObservedObject var state: InspectorState
+
+    var body: some View {
+        let top = Array(state.elementHistogram.prefix(3))
+        ForEach(top.indices, id: \.self) { i in
+            Label("\(top[i].1) \(top[i].0)", systemImage: "circle.fill")
+                .foregroundColor(ElementColors.color(for: top[i].0))
         }
     }
 }

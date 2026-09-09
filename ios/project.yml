@@ -1,0 +1,79 @@
+# xcodegen spec for the iOS run tracker (GJOB-121/124).
+#
+# Why this exists on top of scripts/make_ios_app.sh: the hand-assembled bundle runs on a simulator, but
+# TestFlight and the App Store need a signed ARCHIVE, and `xcodebuild archive` needs a project. This is that
+# project, generated rather than checked in, so it cannot drift from Package.swift — the app target pulls
+# MDEngineRunsUI from the local package instead of listing sources.
+#
+#   brew install xcodegen        # once
+#   cd ios && xcodegen generate  # writes ios/MDEngineRuns.xcodeproj (gitignored)
+#   xcodebuild -project ios/MDEngineRuns.xcodeproj -scheme MDEngineRuns \
+#     -destination 'generic/platform=iOS Simulator' build
+#
+# Archiving additionally needs an Apple Distribution certificate, which team 6CVRWYN3A9 does not have yet —
+# only a Developer ID (direct distribution). See docs/app-store-readiness.md.
+name: MDEngineRuns
+options:
+  bundleIdPrefix: com.forcefieldsilicon.mdengine
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  MDEngine:
+    path: ..
+
+targets:
+  MDEngineRuns:
+    type: application
+    platform: iOS
+    sources:
+      - path: RunsApp.swift
+    dependencies:
+      - package: MDEngine
+        product: MDEngineRunsUI
+    info:
+      path: Generated-Info.plist
+      properties:
+        CFBundleDisplayName: MDEngine Runs
+        CFBundleName: MDEngine Runs
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # The deep link /welcome uses for "Open in MDEngine Runs".
+        CFBundleURLTypes:
+          - CFBundleURLName: com.forcefieldsilicon.mdengine.runs.key
+            CFBundleURLSchemes: [mdengine]
+        # Declared false because the app's only crypto is HTTPS via URLSession, which is exempt. Saying so
+        # here is what avoids the export-compliance questionnaire on every single upload.
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.forcefieldsilicon.mdengine.runs
+        DEVELOPMENT_TEAM: 6CVRWYN3A9
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: 1        # iPhone only, per "iPhone app" — iPad would need its own layout pass
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        # No CODE_SIGN_IDENTITY here on purpose: with CODE_SIGN_STYLE Automatic, Xcode chooses the identity
+        # from the ACTION (build -> development, archive -> distribution), and pinning one is rejected as a
+        # "conflicting provisioning settings" error. The real fix for the archive asking Apple for a
+        # development profile was the explicit Release scheme below, not a signing override.
+
+# An explicit shared scheme: with none, xcodebuild synthesises one whose archive action builds Debug, and
+# Debug signs for development.
+schemes:
+  MDEngineRuns:
+    build:
+      targets:
+        MDEngineRuns: all
+    run:
+      config: Debug
+    archive:
+      config: Release

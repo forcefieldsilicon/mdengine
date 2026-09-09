@@ -37,6 +37,26 @@ tar -xzf "$IN" -C "$WORK" || finish 72 untar
 { echo "== $(date -u +%FT%TZ) pod host diag"; nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>&1 | head -3
   echo "cuda devices: $(ls /dev/nvidia* 2>/dev/null | tr '\n' ' ')"; echo "libcuda: $(ls /usr/lib/x86_64-linux-gnu/libcuda.so.* 2>/dev/null | head -1)"
   echo "env: $(env | grep -E '^(NVIDIA|CUDA)' | tr '\n' ' ')"; } > "$WORK/hostdiag.txt" 2>&1
+# 2c. GPU gate (GJOB-130): some hosts hand the container no CUDA device (NVIDIA_VISIBLE_DEVICES=void, driver libs
+# not injected). LAMMPS/Kokkos would die at init and OpenMM would silently run on the CPU — both at the GPU rate. Probe
+# the driver for real (cuInit + device count) and fail fast as gpu_unavailable: the endpoint does not bill it and
+# relaunches once. hostdiag.txt is shipped so the failure stays explainable. MDE_GPU_GATE=off = dev override only.
+gpu_probe() { python3 - <<'PY' 2>&1
+import ctypes, sys
+try: l = ctypes.CDLL("libcuda.so.1")
+except OSError as e: print("libcuda: %s" % e); sys.exit(1)
+rc = l.cuInit(0)
+if rc: print("cuInit rc=%d" % rc); sys.exit(1)
+n = ctypes.c_int(0); rc = l.cuDeviceGetCount(ctypes.byref(n))
+if rc or n.value < 1: print("cuDeviceGetCount rc=%d n=%d" % (rc, n.value)); sys.exit(1)
+print("ok, %d device(s)" % n.value)
+PY
+}
+PROBE=$(gpu_probe); PRC=$?; echo "gpu probe: $PROBE (NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-unset})" >> "$WORK/hostdiag.txt"
+if [ $PRC -ne 0 ] && [ "${MDE_GPU_GATE:-on}" != off ]; then
+  tar -czf "$RES" -C "$WORK" . 2>/dev/null && curl -sS -m 120 -X PUT -H 'Content-Type: application/gzip' --upload-file "$RES" "$PUT_URL" >/dev/null || true
+  finish 75 gpu_unavailable
+fi
 # 3. run with heartbeat (last 20 thermo-ish lines of the log)
 [ -z "$LAUNCH" ] || [ "$LAUNCH" = default ] && LAUNCH='{lmp} -in {input} -k on g 1 -sf kk -pk kokkos newton on neigh half -log log.lammps'
 CMD=${LAUNCH//\{lmp\}/$LMP}; CMD=${CMD//\{input\}/$INPUT}

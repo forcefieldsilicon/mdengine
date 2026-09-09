@@ -13,6 +13,18 @@ import Foundation
 
 public enum LammpsDumpParser {
     public static func parseFrames(_ text: String) -> [[Arv]] {
+        parseTrajectory(text).map(\.atoms)
+    }
+
+    /// Zero-copy-ish entry point: parse straight from file bytes — skips the
+    /// Data → String UTF-8 validation pass a 500 MB dump doesn't need.
+    public static func parseFrames(data: Data) -> [[Arv]] {
+        parseTrajectory(data: data).map(\.atoms)
+    }
+
+    /// Full parse: atoms plus box bounds, timestep and every extra per-atom
+    /// column (`q`, `c_*`, `v_*`, velocities, forces …) as Float32 columns.
+    public static func parseTrajectory(_ text: String) -> Trajectory {
         // Byte-level parse: Substring-based parsing shares one atomic refcount
         // across every token, which serializes multicore parsing (measured:
         // parallel Substrings were SLOWER than sequential). Raw UTF-8 + strtod
@@ -24,9 +36,7 @@ public enum LammpsDumpParser {
         }
     }
 
-    /// Zero-copy-ish entry point: parse straight from file bytes — skips the
-    /// Data → String UTF-8 validation pass a 500 MB dump doesn't need.
-    public static func parseFrames(data: Data) -> [[Arv]] {
+    public static func parseTrajectory(data: Data) -> Trajectory {
         var bytes = [UInt8](data)
         bytes.append(0)   // strtod safety
         return bytes.withUnsafeBufferPointer { buf in
@@ -36,7 +46,7 @@ public enum LammpsDumpParser {
 
     private static let timestepPrefix = Array("ITEM: TIMESTEP".utf8)
 
-    private static func parseBytes(_ bytes: UnsafePointer<UInt8>, _ length: Int) -> [[Arv]] {
+    private static func parseBytes(_ bytes: UnsafePointer<UInt8>, _ length: Int) -> Trajectory {
         // Frame starts: one linear scan over line starts.
         var starts: [Int] = []
         var pos = 0
@@ -51,7 +61,7 @@ public enum LammpsDumpParser {
         guard !starts.isEmpty else { return [] }
 
         // Parse every frame on its own core; disjoint writes via the holder.
-        var results = [[Arv]?](repeating: nil, count: starts.count)
+        var results = [Frame?](repeating: nil, count: starts.count)
         results.withUnsafeMutableBufferPointer { buffer in
             let holder = FrameResultBuffer(buffer)
             DispatchQueue.concurrentPerform(iterations: starts.count) { k in
@@ -66,13 +76,13 @@ public enum LammpsDumpParser {
 
     /// Sendable wrapper: concurrentPerform writes to disjoint indices only.
     private final class FrameResultBuffer: @unchecked Sendable {
-        let buffer: UnsafeMutableBufferPointer<[Arv]?>
-        init(_ buffer: UnsafeMutableBufferPointer<[Arv]?>) { self.buffer = buffer }
+        let buffer: UnsafeMutableBufferPointer<Frame?>
+        init(_ buffer: UnsafeMutableBufferPointer<Frame?>) { self.buffer = buffer }
     }
 
     /// Parse one ITEM: TIMESTEP block. nil = malformed/incomplete.
     private static func parseFrame(_ bytes: UnsafePointer<UInt8>, from start: Int,
-                                   limit: Int) -> [Arv]? {
+                                   limit: Int) -> Frame? {
         var pos = start
 
         func nextLine() -> (s: Int, e: Int)? {
@@ -91,30 +101,53 @@ public enum LammpsDumpParser {
             let u = Array(p.utf8)
             return line.e - line.s >= u.count && memcmp(bytes + line.s, u, u.count) == 0
         }
+        func isSep(_ b: UInt8) -> Bool { b == 0x20 || b == 0x09 || b == 0x0D }
         func double(at offset: Int) -> Double {
             strtod(UnsafeRawPointer(bytes + offset).assumingMemoryBound(to: CChar.self), nil)
         }
 
+        func text(_ line: (s: Int, e: Int)) -> String {
+            String(decoding: UnsafeBufferPointer(start: bytes + line.s, count: line.e - line.s),
+                   as: UTF8.self)
+        }
+
         guard let tsHeader = nextLine(), hasPrefix(tsHeader, "ITEM: TIMESTEP"),
-              nextLine() != nil,
+              let tsLine = nextLine(),
               let nHeader = nextLine(), hasPrefix(nHeader, "ITEM: NUMBER OF ATOMS"),
               let nLine = nextLine() else { return nil }
+        let timestep = Int(double(at: tsLine.s))
         let count = Int(double(at: nLine.s))
         guard count > 0 else { return nil }
 
         guard let boxHeader = nextLine(), hasPrefix(boxHeader, "ITEM: BOX BOUNDS") else { return nil }
-        var lo = [0.0, 0.0, 0.0], hi = [1.0, 1.0, 1.0]
+        // "ITEM: BOX BOUNDS [xy xz yz] pp pp pp" — flags say which axes wrap;
+        // the xy/xz/yz form adds a third number per bounds line (tilt).
+        let boxTokens = text(boxHeader).split(whereSeparator: \.isWhitespace).dropFirst(3).map(String.init)
+        let triclinic = boxTokens.prefix(3) == ["xy", "xz", "yz"]
+        let flags = triclinic ? Array(boxTokens.dropFirst(3)) : boxTokens
+        var lo = [0.0, 0.0, 0.0], hi = [1.0, 1.0, 1.0], tilt = [0.0, 0.0, 0.0]
         for d in 0..<3 {
             guard let line = nextLine() else { return nil }
             var end: UnsafeMutablePointer<CChar>?
             let a = strtod(UnsafeRawPointer(bytes + line.s).assumingMemoryBound(to: CChar.self), &end)
-            if let end { lo[d] = a; hi[d] = strtod(end, nil) }
+            if let end {
+                lo[d] = a
+                var end2: UnsafeMutablePointer<CChar>?
+                hi[d] = strtod(end, &end2)
+                if triclinic, let end2 { tilt[d] = strtod(end2, nil) }
+            }
         }
+        func periodic(_ d: Int) -> Bool { d < flags.count ? flags[d].hasPrefix("p") : true }
+        let box = SimulationBox(lo: SIMD3(lo[0], lo[1], lo[2]), hi: SIMD3(hi[0], hi[1], hi[2]),
+                                periodicX: periodic(0), periodicY: periodic(1), periodicZ: periodic(2),
+                                tilt: triclinic ? SIMD3(tilt[0], tilt[1], tilt[2]) : nil)
 
         guard let atomsHeader = nextLine(), hasPrefix(atomsHeader, "ITEM: ATOMS") else { return nil }
-        let headerText = String(decoding: UnsafeBufferPointer(
-            start: bytes + atomsHeader.s, count: atomsHeader.e - atomsHeader.s), as: UTF8.self)
-        let cols = headerText.split(separator: " ").dropFirst(2).map(String.init)
+        let headerText = text(atomsHeader)
+        // Split on any whitespace: a CRLF dump leaves "\r" glued to the LAST
+        // column name ("z\r"), the column lookup below then misses, and the
+        // whole frame is discarded as malformed.
+        let cols = headerText.split(whereSeparator: \.isWhitespace).dropFirst(2).map(String.init)
 
         func col(_ names: [String]) -> Int? {
             for n in names { if let k = cols.firstIndex(of: n) { return k } }
@@ -130,21 +163,33 @@ public enum LammpsDumpParser {
         guard (xDirect ?? xScaled) != nil, (yDirect ?? yScaled) != nil,
               (zDirect ?? zScaled) != nil else { return nil }
 
-        var rows: [(id: Int, atom: Arv)] = []
-        rows.reserveCapacity(count)
+        // Every column that is not a coordinate/element/type/id becomes a
+        // Float32 per-atom column on the Frame (q, c_*, v_*, vx…, fx…).
+        let consumed = Set([xDirect, xScaled, yDirect, yScaled, zDirect, zScaled,
+                            elementCol, typeCol, idCol].compactMap { $0 })
+        let extraCols = cols.indices.filter { !consumed.contains($0) }
+        var extraValues = [[Float]](repeating: [], count: extraCols.count)
+        for k in extraValues.indices { extraValues[k].reserveCapacity(count) }
+
+        var ids: [Int] = []
+        var atoms: [Arv] = []
+        ids.reserveCapacity(count)
+        atoms.reserveCapacity(count)
         var tokenStart = [Int](repeating: -1, count: cols.count)
         var tokenEnd = [Int](repeating: -1, count: cols.count)
 
         for _ in 0..<count {
             guard let line = nextLine() else { return nil }   // truncated frame
-            // Tokenize the row: spaces/tabs separate up to cols.count fields.
+            // Tokenize the row: spaces/tabs/CR separate up to cols.count fields.
+            // CR counts because a CRLF row's last byte is 0x0D inside the line
+            // range — otherwise it lands inside the final token ("Fe\r").
             var t = line.s
             var field = 0
             while t < line.e, field < cols.count {
-                while t < line.e, bytes[t] == 0x20 || bytes[t] == 0x09 { t += 1 }
+                while t < line.e, isSep(bytes[t]) { t += 1 }
                 guard t < line.e else { break }
                 tokenStart[field] = t
-                while t < line.e, bytes[t] != 0x20, bytes[t] != 0x09 { t += 1 }
+                while t < line.e, !isSep(bytes[t]) { t += 1 }
                 tokenEnd[field] = t
                 field += 1
             }
@@ -171,11 +216,23 @@ public enum LammpsDumpParser {
             } else {
                 element = "?"
             }
-            let id = value(idCol).map(Int.init) ?? rows.count
-            rows.append((id, Arv(element: element, x: x, y: y, z: z, charge: value(chargeCol))))
+            let atomID = value(idCol).map(Int.init)
+            ids.append(atomID ?? atoms.count)
+            atoms.append(Arv(element: element, x: x, y: y, z: z,
+                             charge: value(chargeCol), id: atomID))
+            for (k, c) in extraCols.enumerated() {
+                extraValues[k].append(Float(value(c) ?? .nan))
+            }
         }
-        rows.sort { $0.id < $1.id }   // dumps are unordered; keep atom identity stable
-        return rows.map(\.atom)
+
+        // Dumps are unordered; keep atom identity stable — and reorder the
+        // extra columns with the same permutation so they stay parallel.
+        let order = atoms.indices.sorted { ids[$0] == ids[$1] ? $0 < $1 : ids[$0] < ids[$1] }
+        var columns: [String: [Float]] = [:]
+        for (k, c) in extraCols.enumerated() {
+            columns[cols[c]] = order.map { extraValues[k][$0] }
+        }
+        return Frame(atoms: order.map { atoms[$0] }, box: box, timestep: timestep, columns: columns)
     }
 }
 
@@ -201,6 +258,20 @@ public enum TrajectoryReader {
         return XYZParser.parseFrames(String(decoding: data, as: UTF8.self))
     }
 
+    /// Full parse (atoms + box + timestep + per-atom columns).
+    public static func parseTrajectory(_ text: String) -> Trajectory {
+        isNativeDump(text) ? LammpsDumpParser.parseTrajectory(text) : XYZParser.parseTrajectory(text)
+    }
+
+    public static func parseTrajectory(contentsOf url: URL) throws -> Trajectory {
+        let data = try Data(contentsOf: url)
+        let head = String(decoding: data.prefix(2048), as: UTF8.self)
+        if head.contains("ITEM: TIMESTEP") {
+            return LammpsDumpParser.parseTrajectory(data: data)
+        }
+        return XYZParser.parseTrajectory(String(decoding: data, as: UTF8.self))
+    }
+
     public static func isNativeDump(_ text: String) -> Bool {
         text.prefix(2048).contains("ITEM: TIMESTEP")
     }
@@ -209,8 +280,8 @@ public enum TrajectoryReader {
     /// `ITEM: ATOMS ...` header); nil for XYZ input.
     public static func dumpFields(_ text: String) -> [String]? {
         guard isNativeDump(text) else { return nil }
-        for line in text.split(separator: "\n").prefix(64) where line.hasPrefix("ITEM: ATOMS") {
-            return line.split(separator: " ").dropFirst(2).map(String.init)
+        for line in text.split(whereSeparator: \.isNewline).prefix(64) where line.hasPrefix("ITEM: ATOMS") {
+            return line.split(whereSeparator: \.isWhitespace).dropFirst(2).map(String.init)
         }
         return nil
     }

@@ -87,6 +87,11 @@ custom connectors, Cursor, Goose — via the hosted endpoint's Streamable HTTP s
 claude mcp add --transport http mdengine-cloud https://api.forcefieldsilicon.com/mcp
 ```
 
+Sign in when the client asks (OAuth 2.1: a consent page where you paste your API key once; the
+client keeps a token, the key stays with you). Scripted clients may instead send the key directly
+as `--header "Authorization: Bearer mde_YOUR_KEY"`. The key comes with a prepaid credit pack
+([forcefieldsilicon.com/mdengine](https://forcefieldsilicon.com/mdengine)). `initialize` and
+`tools/list` work without signing in; tool calls without a credential return 401 with the OAuth
 **Windows and Linux.** The hosted tier is the supported path on both, and it is the full paid
 product: every tool below works from Claude Code on Windows exactly as on a Mac. In PowerShell,
 register at user scope so the server follows you into every folder, then sign in once:
@@ -100,16 +105,20 @@ browser consent page (never into the chat). Decks written on Windows (CRLF line 
 accepted as-is. The local viewer, renderer and CPU job runner are macOS-only today; a Windows/Linux
 local build is planned and demand decides its order, so say so if you need it.
 
-Sign in when the client asks (OAuth 2.1: a consent page where you paste your API key once; the
-client keeps a token, the key stays with you). Scripted clients may instead send the key directly
-as `--header "Authorization: Bearer mde_YOUR_KEY"`. The key comes with a prepaid credit pack
-([forcefieldsilicon.com/mdengine](https://forcefieldsilicon.com/mdengine)). `initialize` and
-`tools/list` work without signing in; tool calls without a credential return 401 with the OAuth
-discovery pointer, which is what makes clients offer the sign-in. Tools: `account`, `submit_job` (deck inline, ≤ 8 MB),
+discovery pointer, which is what makes clients offer the sign-in. Tools: `account`, `capabilities`, `preflight_deck`, `submit_job` (deck inline, ≤ 8 MB),
 `create_job` + `start_job` (big decks via presigned PUT), `job_status`, `job_log`,
 `job_results`, `list_jobs`, `delete_results`, `cancel_job`. Discovery card:
-`https://api.forcefieldsilicon.com/.well-known/mcp/server-card.json`. Server code:
-`hosted/endpoint/mde_mcp.py`.
+`https://api.forcefieldsilicon.com/.well-known/mcp/server-card.json`. The hosted service (endpoint, billing, GPU launcher) is operated by ForceField Silicon and its
+source is not part of this repository; the client side of it (`HostedClient`, CLI `run --gpu`,
+MCP `host=cloud`) is here under the MIT license like everything else.
+
+**Preflight before spend (GJOB-118).** `GET /v1/capabilities` publishes the hosted image's LAMMPS
+version, packages and every style with a `gpu` flag: true = KOKKOS-accelerated, false = the style
+exists but runs on the pod's CPU cores at the GPU rate. Every client checks a deck against it first —
+`mdengine capabilities deck.in`, the app's Run Accelerated, `submit_lammps host=cloud`, the hosted
+`submit_job` — refusing a deck whose styles the image lacks (LAMMPS would exit at startup) and warning
+when the pair style has no `/kk` variant (the run would not use the GPU). `--force` / `force=true`
+overrides; the server only advises (`preflight` in the start response), it never blocks.
 
 Troubleshooting the hosted connector:
 
@@ -122,7 +131,7 @@ Troubleshooting the hosted connector:
 | HTTP 429 | Too many keyless requests from one IP; add the key or slow down. |
 | `job_results` says results unavailable | Files were deleted by `delete_results`, the run produced none, or the 30-day purge ran. |
 | Job `failed` with `runner_error` / `lammps_error` | The deck itself failed; `job_results` (if present) or `job_log` holds the LAMMPS error text. |
-| Job `failed` with `pod_lost` / `no_capacity` | Infrastructure; not billed. Resubmit. |
+| Job `failed` with `pod_lost` / `no_capacity` / `launch_timeout` / `gpu_unavailable` | Infrastructure (pod died, no GPU stock, a pod that never came up, or the host handed the pod no CUDA device); never billed, relaunched once automatically. Resubmit if it still fails. |
 
 Jobs run in the deck's own directory (relative `read_data` paths work) and
 launch with `-sf omp -pk omp N` so the OPENMP package is actually engaged;

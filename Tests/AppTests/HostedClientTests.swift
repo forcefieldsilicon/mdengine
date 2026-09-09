@@ -4,6 +4,25 @@ import XCTest
 /// Offline pieces of the hosted-tier client. The wire protocol itself is exercised
 /// against hosted/mock/mock_endpoint.py (see hosted/README.md), not here.
 final class HostedClientTests: XCTestCase {
+    /// `tar -tzf -` over a tarball we produced. Process in a test on macOS is fine; the shipping code is
+    /// what must not spawn anything.
+    static func tarList(_ tarball: Data) throws -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        p.arguments = ["-tzf", "-"]
+        let stdin = Pipe(), stdout = Pipe()
+        p.standardInput = stdin; p.standardOutput = stdout; p.standardError = Pipe()
+        try p.run()
+        DispatchQueue.global().async {
+            stdin.fileHandleForWriting.write(tarball)
+            stdin.fileHandleForWriting.closeFile()
+        }
+        let out = stdout.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        XCTAssertEqual(p.terminationStatus, 0, "real tar could not list our deck tarball")
+        return String(decoding: out, as: UTF8.self)
+    }
+
     func testDeckTarExcludesArtifacts() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mde-deck-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("results"), withIntermediateDirectories: true)
@@ -11,8 +30,10 @@ final class HostedClientTests: XCTestCase {
             try "x".write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
         }
         let tarball = try HostedClient.tarDeck(dir)
-        let list = try HostedClient.run("/usr/bin/tar", ["-tzf", "-"], stdin: tarball)
-        let names = Set(String(decoding: list.out, as: UTF8.self).split(separator: "\n").map { $0.replacingOccurrences(of: "./", with: "") })
+        // Listed by REAL tar, not by our own reader: tarDeck stopped shelling out in GJOB-152, and the
+        // thing worth checking is still that the endpoint's runner can read what we upload.
+        let list = try Self.tarList(tarball)
+        let names = Set(list.split(separator: "\n").map { $0.replacingOccurrences(of: "./", with: "") })
         XCTAssertTrue(names.isSuperset(of: ["in.lmp", "ffield.reax.X", "O2.data"]))
         for excluded in ["big.traj", "old.lammpstrj", "run.log", "sim.ckpt.a", "results/traj.lammpstrj"] {
             XCTAssertFalse(names.contains(excluded), "\(excluded) should not be uploaded")

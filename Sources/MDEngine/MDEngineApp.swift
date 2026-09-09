@@ -136,7 +136,13 @@ private struct HostedLaunch: ViewModifier {
         content.onAppear {
             // A finished hosted run lands in the viewer like any opened file.
             hosted.openTrajectory = { url in viewer.load(url: url) }
+            _ = PerfMonitor.shared          // arms MDENGINE_PERF=1 logging when set
             let args = CommandLine.arguments
+            // `MDEngine --open <file>`: the perf harness's way in from a shell
+            // (Finder/`open` events need the .app bundle).
+            if let i = args.firstIndex(of: "--open"), i + 1 < args.count {
+                viewer.load(url: URL(fileURLWithPath: args[i + 1]))
+            }
             if let i = args.firstIndex(of: "--run-accelerated"), i + 1 < args.count {
                 openWindow(id: "hosted")
                 hosted.submit(input: URL(fileURLWithPath: args[i + 1]))

@@ -1,0 +1,172 @@
+import XCTest
+@testable import LAMMPSCore
+
+/// Tar without /usr/bin/tar (GJOB-152).
+///
+/// The point of these tests is interoperability, not round-tripping with ourselves: a format only we can
+/// read would be worse than the shell-out it replaces, because the endpoint's runner untars our uploads with
+/// real GNU tar and our downloads come from real tar. So the two central tests hand our output to
+/// /usr/bin/tar and read real tar's output with ours. Those two use Process deliberately — in a test, on
+/// macOS, which is allowed; the shipping code is what must not.
+final class TarTests: XCTestCase {
+    var dir: URL!
+
+    override func setUpWithError() throws {
+        dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tar-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+
+    func write(_ rel: String, _ contents: String) throws {
+        let u = dir.appendingPathComponent(rel)
+        try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try contents.write(to: u, atomically: true, encoding: .utf8)
+    }
+
+    @discardableResult
+    func sh(_ exe: String, _ args: [String]) throws -> Int32 {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: exe); p.arguments = args
+        p.standardOutput = Pipe(); p.standardError = Pipe()
+        try p.run(); p.waitUntilExit(); return p.terminationStatus
+    }
+
+    // MARK: the two that matter
+
+    func testRealTarCanReadWhatWeWrite() throws {
+        try write("in.lmp", "units lj\nrun 100\n")
+        try write("data/Al.eam", "# potential\n1 2 3\n")
+        try write("nested/deep/notes.txt", "hello")
+        let gz = try Tar.archiveGzipped(directory: dir)
+
+        let out = dir.deletingLastPathComponent().appendingPathComponent("out-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: out) }
+        let gzURL = out.appendingPathComponent("a.tar.gz")
+        try gz.write(to: gzURL)
+
+        // The real thing, with the same flags the runner uses.
+        XCTAssertEqual(try sh("/usr/bin/tar", ["-xzf", gzURL.path, "-C", out.path]), 0,
+                       "/usr/bin/tar could not read our archive")
+        XCTAssertEqual(try String(contentsOf: out.appendingPathComponent("in.lmp"), encoding: .utf8),
+                       "units lj\nrun 100\n")
+        XCTAssertEqual(try String(contentsOf: out.appendingPathComponent("data/Al.eam"), encoding: .utf8),
+                       "# potential\n1 2 3\n")
+        XCTAssertEqual(try String(contentsOf: out.appendingPathComponent("nested/deep/notes.txt"), encoding: .utf8),
+                       "hello")
+    }
+
+    func testWeCanReadWhatRealTarWrites() throws {
+        try write("log.lammps", "Step Temp\n0 300\n")
+        try write("work/traj.xyz", "2\nframe\nAr 0 0 0\nAr 1 1 1\n")
+        let gzURL = dir.deletingLastPathComponent().appendingPathComponent("real-" + UUID().uuidString + ".tar.gz")
+        defer { try? FileManager.default.removeItem(at: gzURL) }
+        XCTAssertEqual(try sh("/usr/bin/tar", ["-czf", gzURL.path, "-C", dir.path, "."]), 0)
+
+        let dest = dir.deletingLastPathComponent().appendingPathComponent("x-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let written = try Tar.extract(try Data(contentsOf: gzURL), to: dest)
+        XCTAssertTrue(written.contains("log.lammps"), "got \(written)")
+        XCTAssertTrue(written.contains("work/traj.xyz"), "got \(written)")
+        XCTAssertEqual(try String(contentsOf: dest.appendingPathComponent("log.lammps"), encoding: .utf8),
+                       "Step Temp\n0 300\n")
+        XCTAssertEqual(try String(contentsOf: dest.appendingPathComponent("work/traj.xyz"), encoding: .utf8),
+                       "2\nframe\nAr 0 0 0\nAr 1 1 1\n")
+    }
+
+    // MARK: gzip
+
+    func testGzipRoundTripAndRealGunzip() throws {
+        let body = Data((0..<200_000).map { UInt8($0 % 251) })      // compressible but not trivially so
+        let gz = try Tar.gzip(body)
+        XCTAssertTrue(Tar.isGzip(gz))
+        XCTAssertLessThan(gz.count, body.count)
+        XCTAssertEqual(try Tar.gunzip(gz), body)
+
+        // And real gunzip agrees, which is what proves the header/CRC/ISIZE framing is right rather than
+        // merely self-consistent.
+        let u = dir.appendingPathComponent("b.gz")
+        try gz.write(to: u)
+        XCTAssertEqual(try sh("/usr/bin/gunzip", ["-t", u.path]), 0, "real gunzip rejected our stream")
+    }
+
+    func testCorruptGzipIsRejectedNotSilentlyTruncated() throws {
+        var gz = try Tar.gzip(Data("the quick brown fox".utf8))
+        gz[gz.count - 5] ^= 0xFF                                    // damage the CRC region
+        XCTAssertThrowsError(try Tar.gunzip(gz)) { e in
+            XCTAssertTrue("\(e)".contains("CRC") || "\(e)".contains("DEFLATE"), "\(e)")
+        }
+        XCTAssertThrowsError(try Tar.gunzip(Data("not gzip at all".utf8)))
+    }
+
+    // MARK: excludes, determinism, safety
+
+    func testExcludesMatchComponentsAndExtensionGlobs() throws {
+        try write("in.lmp", "x")
+        try write("big.lammpstrj", "trajectory")
+        try write("results/keep.txt", "keep")
+        try write(".git/config", "vcs")
+        let entries = try Tar.entries(of: try Tar.archive(directory: dir, excluding: ["*.lammpstrj", ".git"]))
+        let files = entries.filter { !$0.isDirectory }.map(\.path).sorted()
+        XCTAssertEqual(files, ["in.lmp", "results/keep.txt"])
+    }
+
+    func testEveryDeckExcludePatternActuallyMatches() throws {
+        // Regression on a bug in the first matcher: it understood *.ext and exact names only, so
+        // *.ckpt*, *.restart* and results-* silently matched nothing and the excludes leaked checkpoints
+        // into uploads. Drive the real HostedClient.deckExcludes list, not a convenient subset.
+        try write("in.lmp", "keep")
+        try write("Al.restart.5000", "restart")
+        try write("run.ckpt.3", "checkpoint")
+        try write("results-002/out.txt", "old results")
+        try write("results/out.txt", "results")
+        try write("traj.lammpstrj", "traj")
+        try write("movie.mp4", "movie")
+        try write(".git/config", "vcs")
+        try write("sub/Cu.restart.1", "nested restart")
+        let entries = try Tar.entries(of: try Tar.archive(directory: dir, excluding: HostedClient.deckExcludes))
+        XCTAssertEqual(entries.filter { !$0.isDirectory }.map(\.path).sorted(), ["in.lmp"])
+    }
+
+    func testArchiveIsReproducible() throws {
+        // Same deck, same bytes — otherwise hashing an upload to detect a changed deck is meaningless.
+        try write("a.txt", "one")
+        try write("b/c.txt", "two")
+        XCTAssertEqual(try Tar.archive(directory: dir), try Tar.archive(directory: dir))
+    }
+
+    func testPathTraversalIsRefused() throws {
+        // A malicious or buggy archive must not write outside the destination. Built by hand because real
+        // tar refuses to create one.
+        var evil = try Tar.header(name: "../escaped.txt", size: 5, type: "0", url: nil)
+        evil.append(Data("pwned".utf8))
+        evil.append(Data(count: Tar.blockSize - 5))
+        evil.append(Data(count: Tar.blockSize * 2))
+        let dest = dir.appendingPathComponent("dest")
+        XCTAssertThrowsError(try Tar.extract(evil, to: dest)) { e in
+            XCTAssertTrue("\(e)".contains("escapes"), "\(e)")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("escaped.txt").path))
+    }
+
+    func testTooLongPathIsAnErrorNotATruncation() throws {
+        let long = String(repeating: "d/", count: 60) + "f.txt"     // > 100 bytes
+        XCTAssertThrowsError(try Tar.header(name: long, size: 0, type: "0", url: nil)) { e in
+            XCTAssertTrue("\(e)".contains("too long"), "\(e)")
+        }
+    }
+
+    func testEmptyDirectoryProducesAValidEmptyArchive() throws {
+        let a = try Tar.archive(directory: dir)
+        XCTAssertEqual(a.count, Tar.blockSize * 2)
+        XCTAssertTrue(try Tar.entries(of: a).isEmpty)
+    }
+
+    func testBinaryFileSurvivesExactly() throws {
+        // Trajectories are not text; an off-by-one in the padding maths would corrupt them.
+        let bytes = Data((0..<5000).map { UInt8(($0 * 7) % 256) })
+        try bytes.write(to: dir.appendingPathComponent("frame.bin"))
+        let dest = dir.appendingPathComponent("out")
+        try Tar.extract(try Tar.archiveGzipped(directory: dir), to: dest)
+        XCTAssertEqual(try Data(contentsOf: dest.appendingPathComponent("frame.bin")), bytes)
+    }
+}

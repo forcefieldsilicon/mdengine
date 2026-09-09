@@ -7,7 +7,10 @@ import MDRender
 /// Shares its UserDefaults keys with the Settings window and the renderer,
 /// so every change applies live.
 struct InspectorView: View {
-    @ObservedObject var model: ContentViewModel
+    /// Actions only — deliberately NOT @ObservedObject: observing the model
+    /// re-laid out this whole Form on every playback tick (InspectorState).
+    let model: ContentViewModel
+    @ObservedObject var state: InspectorState
 
     @AppStorage("atomPointSize") private var atomPointSize = 14.0
     @AppStorage("orbitSensitivity") private var orbitSensitivity = 8.0
@@ -30,10 +33,9 @@ struct InspectorView: View {
     @AppStorage("videoAnnotations") private var videoAnnotations = true
     @AppStorage("videoOrbit") private var videoOrbit = false
     @AppStorage("videoOrbitSpeed") private var videoOrbitSpeed = 6.0
-
-    // Z-profile element roles; re-defaulted whenever the loaded element set changes.
-    @State private var zSubstrate = ""
-    @State private var zProbe = ""
+    @AppStorage("showPerfHUD") private var showPerfHUD = false
+    @AppStorage("showBonds") private var showBonds = false
+    @AppStorage("showBackbone") private var showBackbone = false
 
     var body: some View {
         Form {
@@ -140,6 +142,12 @@ struct InspectorView: View {
                         "\(n.redComponent) \(n.greenComponent) \(n.blueComponent)",
                         forKey: "backgroundColor")
                 }
+                Toggle("Bonds", isOn: $showBonds)
+                    .help("Draw sticks between atoms closer than 1.15 × the sum of their covalent radii (Cordero 2008). Each half takes its own atom's colour. Perceived per frame, off the main thread; skipped above 200 000 atoms.")
+                Toggle("Backbone trace", isOn: $showBackbone)
+                    .help("Light-grey polyline through each chain's α carbons, in residue order. Needs residue labels in the file (extended XYZ with chain/resid, or a name column) — otherwise nothing is drawn.")
+                Toggle("Performance HUD", isOn: $showPerfHUD)
+                    .help("Draws/s, main-thread hitches and analysis timings in the main pane. Idle should read 0 draws/s; playback 0 hitches.")
             }
 
 
@@ -159,14 +167,14 @@ struct InspectorView: View {
                     ForEach(histogram.indices, id: \.self) { i in
                         ElementRow(model: model,
                                    element: histogram[i].0, count: histogram[i].1)
-                            .id("\(histogram[i].0)-\(model.styleResetToken)")
+                            .id("\(histogram[i].0)-\(state.styleResetToken)")
                     }
                 }
             }
 
-            CollapsibleSection("Z-profile", key: "inspExpZProfile", initiallyExpanded: false) {
-                zProfileSection
-            }
+            // Analysis tools (design §1 "App"): add from the catalogue, one
+            // collapsible section per tool; compute only while visible (§1b).
+            ToolsArea(model: model, state: state)
 
             CollapsibleSection("Video export", key: "inspExpVideo", initiallyExpanded: false) {
                 Picker("Resolution", selection: $videoHeight) {
@@ -181,7 +189,7 @@ struct InspectorView: View {
                     Text("auto (≈15 s)").tag(0)
                     ForEach([1, 2, 5, 10, 20], id: \.self) { Text("every \($0)").tag($0) }
                 }
-                if model.frames.count > 1 {
+                if state.frameCount > 1 {
                     LabeledContent("Video length") {
                         Text(videoDurationText).monospacedDigit()
                     }
@@ -196,7 +204,7 @@ struct InspectorView: View {
                             .help("\(Int(videoOrbitSpeed))°/s")
                     }
                 }
-                if let progress = model.exportProgress {
+                if let progress = state.exportProgress {
                     HStack {
                         ProgressView(value: progress)
                         Button("Cancel") { model.cancelVideoExport() }
@@ -208,7 +216,7 @@ struct InspectorView: View {
                         Button("Export GIF…") { model.exportVideo(format: .gif) }
                             .help("Web-sized: 640×360, ≤15 fps — right for a README")
                     }
-                    .disabled(model.frames.count < 2)
+                    .disabled(state.frameCount < 2)
                 }
             }
 
@@ -238,164 +246,38 @@ struct InspectorView: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { defaultZElements() }
-        .onChange(of: elementNames) { _ in defaultZElements() }
+        .onAppear { model.scheduleAnalyses() }
     }
 
     private var videoDurationText: String {
         let fps = max(1, videoFPS)
         let stride = videoStride > 0 ? videoStride
-            : VideoExporter.autoStride(frameCount: model.frames.count, fps: fps)
-        let outFrames = (model.frames.count + stride - 1) / stride
+            : VideoExporter.autoStride(frameCount: state.frameCount, fps: fps)
+        let outFrames = (state.frameCount + stride - 1) / stride
         let seconds = Double(outFrames) / Double(fps)
         return String(format: "%d frames · %.1f s", outFrames, seconds)
     }
 
-    // MARK: - Z-profile (surface plane + penetration depths along z)
-
+    /// Published by the model (computed off the main thread), not derived in
+    /// the body on every re-render.
+    private var elementHistogram: [(String, Int)] { state.elementHistogram }
     private var elementNames: [String] { elementHistogram.map(\.0) }
+}
 
-    private func defaultZElements() {
-        let names = elementNames
-        guard !names.contains(zSubstrate) || !names.contains(zProbe) || zSubstrate == zProbe else { return }
-        if let d = ZProfileAnalysis.defaultElements(for: model.atoms) {
-            zSubstrate = d.substrate
-            zProbe = d.probe
-        }
-    }
-
-    @ViewBuilder private var zProfileSection: some View {
-        let names = elementNames
-        if names.count < 2 {
-            Text("Needs two elements (substrate + deposited species)")
-                .foregroundColor(.secondary)
-        } else {
-            Picker("Substrate", selection: $zSubstrate) {
-                ForEach(names, id: \.self) { Text($0) }
-            }
-            Picker("Probe", selection: $zProbe) {
-                ForEach(names, id: \.self) { Text($0) }
-            }
-            if let zp = ZProfileAnalysis(frame: model.atoms,
-                                         substrate: zSubstrate, probe: zProbe) {
-                LabeledContent("Surface plane") { Text(String(format: "z = %.1f Å", zp.surfaceZ)).monospacedDigit() }
-                LabeledContent("Penetrated") { Text("\(zp.penetrations.count)").monospacedDigit() }
-                LabeledContent("Depth (Å)") {
-                    if let maxP = zp.maxPenetration, let minP = zp.minPenetration,
-                       let meanP = zp.meanPenetration {
-                        Text(String(format: "%.2f · %.2f · %.2f", minP, meanP, maxP))
-                            .monospacedDigit()
-                    } else {
-                        Text("—").foregroundColor(.secondary)
-                    }
-                }
-                LabeledContent("At surface (≤\(String(format: "%.1f", ZProfileAnalysis.surfaceBand)) Å)") {
-                    Text("\(zp.atSurfaceCount)").monospacedDigit()
-                }
-                LabeledContent("Above / in flight") { Text("\(zp.aboveCount)").monospacedDigit() }
-                LabeledContent("Bound probe ⟨q⟩") {
-                    if let q = zp.boundProbeMeanCharge {
-                        Text(String(format: "%+.2f e", q)).monospacedDigit()
-                    } else {
-                        Text("—").foregroundColor(.secondary)
-                    }
-                }
-                zHistogram(zp)
-                // Same button-row layout as Video export below, so the two
-                // export rows align. Always exports the trajectory's LAST frame.
-                HStack {
-                    Button("Export CSV…") {
-                        model.exportZProfile(substrate: zSubstrate, probe: zProbe, format: .csv)
-                    }
-                    Button("Export Excel…") {
-                        model.exportZProfile(substrate: zSubstrate, probe: zProbe, format: .xlsx)
-                    }
-                    .help("Two sheets: profile summary + histogram, and one row per probe atom")
-                }
-                .disabled(model.frames.isEmpty)
-                if !model.frames.isEmpty && model.frameIndex != model.frames.count - 1 {
-                    Text("Exports use the last frame (\(model.frames.count - 1))")
-                        .font(.system(size: 9)).foregroundColor(.secondary)
-                }
-            } else if zSubstrate == zProbe {
-                Text("Pick two different elements").foregroundColor(.secondary)
-            }
-        }
-    }
-
-    /// Mini histogram of probe z relative to the surface plane: orange bars
-    /// left of the dashed surface line = penetrated, blue right = above; the
-    /// axis below is depth/height in Å relative to the plane.
-    private func zHistogram(_ zp: ZProfileAnalysis) -> some View {
-        let maxCount = max(1, zp.histogram.map(\.count).max() ?? 1)
-        let lo = zp.histogram.first?.range.lowerBound ?? 0
-        let hi = zp.histogram.last?.range.upperBound ?? 1
-        let span = max(0.001, hi - lo)
-        let surfaceFrac = min(1, max(0, (0 - lo) / span))
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .bottom, spacing: 2) {
-                ForEach(zp.histogram.indices, id: \.self) { i in
-                    let bin = zp.histogram[i]
-                    let penetratedBin = bin.range.upperBound <= 0.01
-                    Rectangle()
-                        .fill(penetratedBin ? Color.orange : Color.accentColor.opacity(0.7))
-                        .frame(height: max(2, 36 * CGFloat(bin.count) / CGFloat(maxCount)))
-                        .frame(maxWidth: .infinity, alignment: .bottom)
-                        .help(String(format: "%.1f…%.1f Å rel. surface: %d",
-                                     bin.range.lowerBound, bin.range.upperBound, bin.count))
-                }
-            }
-            .frame(height: 38, alignment: .bottom)
-            .padding(.top, 12)   // room for the "surface" label above the bars
-            .overlay(alignment: .bottomLeading) {   // dashed line + label at the surface plane (0 Å)
-                GeometryReader { geo in
-                    let x = geo.size.width * CGFloat(surfaceFrac)
-                    Path { p in
-                        p.move(to: CGPoint(x: x, y: 12))
-                        p.addLine(to: CGPoint(x: x, y: geo.size.height))
-                    }
-                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                    .foregroundColor(.secondary)
-                    Text("surface 0 Å")
-                        .font(.system(size: 8)).foregroundColor(.secondary)
-                        .fixedSize()
-                        .position(x: min(max(x, 28), geo.size.width - 28), y: 5)
-                }
-            }
-            .help("\(zp.probeElement) atoms per depth bin, measured from the \(zp.substrateElement) surface plane. "
-                  + "Dashed line = the surface (0 Å). Orange bars = atoms that penetrated below it; "
-                  + "blue bars = atoms at or above it (chemisorbed or in flight).")
-            // Depth axis: numeric labels in Å relative to the surface plane
-            // (negative = penetrated), evenly spaced to match the bin span.
-            HStack {
-                ForEach(0..<5) { i in
-                    if i > 0 { Spacer() }
-                    Text(String(format: "%.1f", lo + span * Double(i) / 4))
-                        .font(.system(size: 8)).monospacedDigit()
-                        .foregroundColor(.secondary)
-                }
-            }
-            HStack {
-                Text("◀ deeper").font(.system(size: 9)).foregroundColor(.orange)
-                Spacer()
-                Text("Å rel. surface").font(.system(size: 9)).foregroundColor(.secondary)
-                Spacer()
-                Text("above surface ▶").font(.system(size: 9)).foregroundColor(.secondary)
-            }
-        }
-    }
-
-    private var elementHistogram: [(String, Int)] {
-        var histogram: [String: Int] = [:]
-        for a in model.atoms { histogram[a.element, default: 0] += 1 }
-        return histogram.sorted { ($0.value, $1.key) > ($1.value, $0.key) }
-            .map { ($0.key, $0.value) }
+/// Identity-equatable so the playback tick does not re-run the inspector's
+/// body: ContentView rebuilds `InspectorView(model:state:)` on every frame,
+/// and without this SwiftUI treated the new value as changed (sampled:
+/// CollapsibleSection/ElementRow bodies + Form layout on every tick). State
+/// changes still arrive through @ObservedObject / @AppStorage as usual.
+extension InspectorView: Equatable {
+    static func == (lhs: InspectorView, rhs: InspectorView) -> Bool {
+        lhs.model === rhs.model && lhs.state === rhs.state
     }
 }
 
 /// Inspector group that expands/collapses on click, with a visible chevron.
 /// Expansion state persists per section across launches.
-private struct CollapsibleSection<Content: View>: View {
+struct CollapsibleSection<Content: View>: View {
     private let title: String
     @AppStorage private var expanded: Bool
     @ViewBuilder private let content: () -> Content
@@ -425,7 +307,7 @@ private struct CollapsibleSection<Content: View>: View {
 /// and its view preset underneath. Pane 1 is the main viewport (always on).
 private struct PaneGroup: View {
     let index: Int
-    @ObservedObject var model: ContentViewModel
+    let model: ContentViewModel          // actions only (see InspectorView)
     @AppStorage private var preset: String
     @AppStorage private var scaleBar: Bool
     @AppStorage("showScaleBar") private var showScaleBar = true
@@ -493,7 +375,7 @@ private struct PaneGroup: View {
 /// Color and size persist per element token and apply to every pane and to
 /// video export; final sprite size = global Atom size × this factor.
 private struct ElementRow: View {
-    @ObservedObject var model: ContentViewModel
+    let model: ContentViewModel          // actions only (see InspectorView)
     let element: String
     let count: Int
     @State private var color: Color

@@ -7,13 +7,18 @@ public struct Arv {
     public let z: Double
     /// Per-atom charge (native dumps with a q column); nil when absent.
     public let charge: Double?
+    /// LAMMPS atom id when the source carried one — atom identity across frames
+    /// (displacement, MSD, rupture tracking). nil for XYZ and id-less dumps.
+    public let id: Int?
 
-    public init(element: String, x: Double, y: Double, z: Double, charge: Double? = nil) {
+    public init(element: String, x: Double, y: Double, z: Double,
+                charge: Double? = nil, id: Int? = nil) {
         self.element = element
         self.x = x
         self.y = y
         self.z = z
         self.charge = charge
+        self.id = id
     }
 }
 
@@ -26,7 +31,7 @@ public extension Array where Element == [Arv] {
         return map { frame in
             frame.map { a in
                 guard let t = Int(a.element), t >= 1, t <= symbols.count else { return a }
-                return Arv(element: symbols[t - 1], x: a.x, y: a.y, z: a.z, charge: a.charge)
+                return Arv(element: symbols[t - 1], x: a.x, y: a.y, z: a.z, charge: a.charge, id: a.id)
             }
         }
     }

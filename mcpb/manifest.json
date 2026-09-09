@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mdengine",
   "display_name": "MDEngine",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Inspect, render and analyse molecular-dynamics trajectories and run LAMMPS jobs as detached background work.",
   "long_description": "MDEngine's MCP server gives an AI agent a molecular-dynamics workbench on macOS: trajectory inspection (XYZ, extended-XYZ, LAMMPS dump), deposition/oxidation depth profiles, Metal-rendered PNG frames and MP4/GIF videos so the agent can *see* a simulation, frame export and decimation, and a detached LAMMPS job runner (submit, status, log tail, files, cancel) that survives the server exiting and display sleep. Optional remote hosts over ssh and the paid ForceField Silicon GPU tier. Simulation decks are programs: a submitted deck runs with your user's privileges \u2014 read decks before running them.",
   "author": {
@@ -34,7 +34,11 @@
     },
     {
       "name": "z_profile",
-      "description": "Depth analysis of a deposition/oxidation trajectory: locates the substrate's top surface plane along z (mean z of the top 5% of substrate atoms), then reports probe-atom penetration depths below it, at-surface and in-flight counts, mean bound-probe charge (when the dump has q), and a z histogram relative to the surface. Defaults: substrate = most abundant element, probe = second."
+      "description": "DEPRECATED alias of analyze(tool: 'z_profile') \u2014 kept for callers of MCP Registry \u2264 0.6.x; prefer `analyze`. Depth analysis of a deposition/oxidation trajectory: locates the substrate's top surface plane along z (mean z of the top 5% of substrate atoms), then reports probe-atom penetration depths below it, at-surface and above counts, mean bound-probe charge (when the dump has q), and a z histogram relative to the surface. Defaults: substrate = most abundant element, probe = second."
+    },
+    {
+      "name": "analyze",
+      "description": "Run a registered MDEngine analysis tool on a trajectory frame (the same tools the app's inspector runs). Call it WITHOUT `tool` first: that returns the catalogue \u2014 each tool's id, use-case category, what it produces (per-atom field / profile / scalar / time series), what it requires, and its default parameters. Then call it with `tool` for the result: a summary table, a binned profile, a scalar, and notes. With `frames`, the same scalar over a range of frames (a time series)."
     },
     {
       "name": "render_video",
@@ -47,6 +51,10 @@
     {
       "name": "export_frame",
       "description": "Write one frame of a trajectory to a new plain-XYZ file."
+    },
+    {
+      "name": "cloud_capabilities",
+      "description": "What the hosted GPU tier can run: LAMMPS version, installed packages, GPU-accelerated vs CPU-only styles. With `input`, preflights that deck the way submit_lammps host=cloud does \u2014 styles missing from the hosted image (the run would exit at startup), CPU-only styles, and whether the pair force will use the GPU. Nothing is submitted or billed."
     },
     {
       "name": "decimate",

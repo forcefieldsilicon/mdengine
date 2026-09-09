@@ -77,14 +77,33 @@ final class HostedJobsModel: ObservableObject {
         submit(input: url)
     }
 
-    func submit(input: URL, gpu: String = "any", wallHours: Double = 4) {
+    func submit(input: URL, gpu: String = "any", wallHours: Double = 4, force: Bool = false) {
         busy = true
         queue.async { [weak self] in
             do {
                 let client = try HostedClient.fromSavedCredentials()
-                let spec = HostedJobSpec(input: input.lastPathComponent,
+                var spec = HostedJobSpec(input: input.lastPathComponent,
                                          label: input.deletingPathExtension().lastPathComponent,
                                          gpu: gpu, wallLimitS: Int(wallHours * 3600))
+                let caps = try? client.capabilities()
+                let (routed, pf) = DeckPreflight.route(input: input, caps: caps)  // GJOB-116: full image only when the deck needs it
+                spec.runner = routed
+                if !force {                                           // preflight before spend (GJOB-118)
+                    if pf.needsAttention {
+                        let lines = pf.lines(rateHint: (caps?.rates?[gpu] ?? caps?.rates?["any"]).map { String(format: "$%.2f/h", $0) })
+                        Task { @MainActor in
+                            self?.busy = false
+                            let a = NSAlert()
+                            a.alertStyle = .warning
+                            a.messageText = pf.ok ? "This deck would not use the GPU" : "This deck needs styles no hosted image has"
+                            a.informativeText = lines.joined(separator: "\n\n")
+                            a.addButton(withTitle: pf.ok ? "Run on CPU cores anyway" : "Submit anyway (will fail)")
+                            a.addButton(withTitle: "Cancel")
+                            if a.runModal() == .alertFirstButtonReturn { self?.submit(input: input, gpu: gpu, wallHours: wallHours, force: true) }
+                        }
+                        return
+                    }
+                }
                 let id = try client.submit(input: input.path, spec: spec)
                 Task { @MainActor in
                     self?.busy = false

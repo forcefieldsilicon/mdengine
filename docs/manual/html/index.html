@@ -30,13 +30,15 @@
   pre{ background:var(--code); border:1px solid var(--rule); border-radius:6px;
        padding:.9rem 1rem; overflow-x:auto; font-size:.85em; line-height:1.5; }
   p.note{ color:var(--muted); font-size:.9em; }
+  a{ color:var(--accent); }
 </style>
 </head>
 <body>
 <main>
   <p class="tag">MDEngine · ForceField Silicon</p>
   <h1>User Manual</h1>
-  <p class="sub">A native macOS viewer for molecular-dynamics trajectories.</p>
+  <p class="sub">A native macOS viewer for molecular-dynamics trajectories.<br>
+  Chapters: <b>this page</b> · <a href="tools.html">Analysis tools</a></p>
 
   <h2>Overview</h2>
   <p>MDEngine renders the final frame of a molecular-dynamics trajectory as a 3D
@@ -91,7 +93,7 @@
   centre depth; in perspective, nearer and farther atoms deviate slightly
   (orthographic <kbd>⌥⌘P</kbd> is depth-true everywhere). Toggle it off in the
   same place.</p>
-  <p><b>Z-profile</b> (Inspector ▸ Z-profile): depth analysis of the current frame
+  <p><b>Z-profile</b> (Inspector ▸ Tools ▸ Add tool ▸ Z-profile): depth analysis of the current frame
   for deposition/oxidation trajectories. Pick the <em>substrate</em> element (the
   slab; defaults to the most abundant) and the <em>probe</em> (the deposited
   species). The surface plane is the mean z of the top 5% of substrate atoms —
@@ -99,12 +101,21 @@
   probe atoms have penetrated below it (with min · mean · max depths), how many
   sit chemisorbed within 2.5&nbsp;Å above it, how many are still in flight, the
   mean charge of bound probes (when the file carries charges), and a histogram
-  of probe height relative to the surface (orange bars = penetrated). It updates
-  live while scrubbing, during playback, and as a followed file grows. The same
-  analysis is available to agents as the MCP <code>z_profile</code> tool, and
+  of probe height relative to the surface. It computes only while its section is
+  expanded (or it drives the overlay), like every other tool, and exports to CSV or
+  Excel from its card. The same analysis is available to agents as the MCP
+  <code>analyze</code> tool with <code>tool: "z_profile"</code> (the older
+  <code>z_profile</code> tool name still works as a deprecated alias), and
   agents can render stills and movies headlessly via <code>render_image</code> /
   <code>render_video</code> (camera, per-element colors/sizes, and a
   <code>contrast</code> auto-visibility preset).</p>
+  <p><b>Analysis tools</b>: the Z-profile is the first of a catalogue of studies
+  — grouped by use case, each producing a summary table, an optional per-atom
+  colour field, a binned profile, and one scalar worth plotting over frames. The
+  same catalogue runs from the shell (<code>mdengine analyze</code>) and from an
+  agent (the MCP <code>analyze</code> tool). See
+  <a href="tools.html">Analysis tools</a> for each tool's method, parameters,
+  reference and validation.</p>
 
   <h2>Views</h2>
   <p>The <b>View</b> button (top-right of the viewport) snaps the camera to a
@@ -156,6 +167,8 @@ Ar   11.402  4.114  9.882
     <tr><th>Command</th><th>Does</th></tr>
     <tr><td><code>mdengine info file.xyz</code></td><td>Frames, atom counts, elements, bounding box</td></tr>
     <tr><td><code>mdengine export file.xyz -o out.xyz --frame last</code></td><td>Write one frame as plain XYZ</td></tr>
+    <tr><td><code>mdengine analyze</code></td><td>List the <a href="tools.html">analysis tools</a> — id, category, what they produce, default parameters</td></tr>
+    <tr><td><code>mdengine analyze z_profile dump.lammpstrj --frame last</code></td><td>Run one tool on a frame: summary table, profile, notes (<code>--all</code>/<code>--frames a-b</code> for a per-frame scalar; <code>--json</code>, <code>--csv</code>)</td></tr>
     <tr><td><code>mdengine decimate big.xyz --every 10</code></td><td>Keep every 10th frame (final frame always kept) — shrinks huge trajectories for viewing</td></tr>
     <tr><td><code>mdengine run input.in --threads 6</code></td><td>Run LAMMPS with <code>-sf omp -pk omp N</code> so the OPENMP package is actually engaged</td></tr>
     <tr><td><code>mdengine gui</code></td><td>Open MDEngine.app</td></tr>

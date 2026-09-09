@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 swift build -c release
 BIN=$(swift build -c release --show-bin-path)
 
-APP=/Applications/MDEngine.app
+APP=${APP:-/Applications/MDEngine.app}   # override to package without touching the installed app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -15,7 +15,7 @@ cp -R "$BIN/MDEngine_MDEngine.bundle" "$APP/Contents/Resources/"
 
 # Manual ships inside the bundle from the repo source.
 mkdir -p "$APP/Contents/Resources/doc/manual/html"
-cp docs/manual/html/index.html "$APP/Contents/Resources/doc/manual/html/index.html"
+cp docs/manual/html/*.html "$APP/Contents/Resources/doc/manual/html/"   # index + chapters (tools.html)
 
 # Icon (regenerate only if missing)
 if [ ! -f scripts/AppIcon.icns ]; then
@@ -40,8 +40,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>MDEngine</string>
     <key>CFBundleDisplayName</key><string>MDEngine</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.6.3</string>
-    <key>CFBundleVersion</key><string>7</string>
+    <key>CFBundleShortVersionString</key><string>0.7.0</string>
+    <key>CFBundleVersion</key><string>8</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>

@@ -151,9 +151,9 @@ enum Jobs {
         } else {
             return "(no log yet)"
         }
-        let all = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        let all = text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline).map(String.init)
         let interesting = all.filter { line in
-            let t = line.trimmingCharacters(in: .whitespaces)
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if t.hasPrefix("Step") || t.hasPrefix("Total wall time") || t.hasPrefix("ERROR") { return true }
             let fields = t.split(separator: " ", omittingEmptySubsequences: true)
             return fields.count >= 3 && fields.allSatisfy { Double($0) != nil }
@@ -242,12 +242,23 @@ let toolDefs: [[String: Any]] = [
                      "properties": ["path": ["type": "string", "description": "Path to the trajectory file"]],
                      "required": ["path"]]],
     ["name": "z_profile",
-     "description": "Depth analysis of a deposition/oxidation trajectory: locates the substrate's top surface plane along z (mean z of the top 5% of substrate atoms), then reports probe-atom penetration depths below it, at-surface and in-flight counts, mean bound-probe charge (when the dump has q), and a z histogram relative to the surface. Defaults: substrate = most abundant element, probe = second.",
+     "description": "DEPRECATED alias of analyze(tool: 'z_profile') — kept for callers of MCP Registry ≤ 0.6.x; prefer `analyze`. Depth analysis of a deposition/oxidation trajectory: locates the substrate's top surface plane along z (mean z of the top 5% of substrate atoms), then reports probe-atom penetration depths below it, at-surface and above counts, mean bound-probe charge (when the dump has q), and a z histogram relative to the surface. Defaults: substrate = most abundant element, probe = second.",
      "inputSchema": ["type": "object",
                      "properties": ["path": ["type": "string", "description": "Path to the trajectory file"],
                                     "frame": ["type": "string", "description": "'first', 'last' (default), or a 0-based index"],
                                     "substrate": ["type": "string", "description": "Substrate element/type token (default: most abundant)"],
                                     "probe": ["type": "string", "description": "Deposited-species element/type token (default: second most abundant)"]],
+                     "required": ["path"]]],
+    ["name": "analyze",
+     "description": "Run a registered MDEngine analysis tool on a trajectory frame (the same tools the app's inspector runs). Call it WITHOUT `tool` first: that returns the catalogue — each tool's id, use-case category, what it produces (per-atom field / profile / scalar / time series), what it requires, and its default parameters. Then call it with `tool` for the result: a summary table, a binned profile, a scalar, and notes. With `frames`, the same scalar over a range of frames (a time series).",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string", "description": "Path to the trajectory file"],
+                                    "tool": ["type": "string", "description": "Registered tool id (e.g. 'z_profile', 'column_field'); omit for the catalogue"],
+                                    "frame": ["type": "string", "description": "'first', 'last' (default), or a 0-based index"],
+                                    "frames": ["type": "string", "description": "Time series over 'all', 'a-b', or 'a-b:stride' (0-based, inclusive) — returns one scalar + summary per frame instead of one frame's result"],
+                                    "params": ["type": "object", "description": "Tool parameters, merged over the tool's defaults (see the catalogue's default_parameters)"],
+                                    "reference_frame": ["type": "integer", "description": "Reference frame index for tools that measure change (Deformation); default 0"],
+                                    "include_field": ["type": "boolean", "description": "Include the per-atom field VALUES (one number per atom — large). Default false: only the palette, legend and atom count are returned."]],
                      "required": ["path"]]],
     ["name": "render_video",
      "description": "Render a trajectory into an MP4 (H.264) or animated GIF via the same Metal renderer the app uses. Annotations (scale bar + frame counter) baked by default. Camera defaults to the home view; pass yaw/pitch degrees to frame the shot (front view of a z-up slab: pitch -90). Stride defaults to ~15 s of video. Synchronous — a long trajectory at 4K can take minutes.",
@@ -281,6 +292,9 @@ let toolDefs: [[String: Any]] = [
                                     "distance": ["type": "number", "description": "Camera distance (default 2.8; smaller = closer)"],
                                     "orthographic": ["type": "boolean"],
                                     "annotations": ["type": "boolean", "description": "Scale bar + frame counter (default true)"],
+                                    "overlay": ["type": "string", "description": "Analysis tool id whose per-atom field colours the atoms (e.g. column_field); legend baked bottom-right. See analyze for the catalogue."],
+                                    "overlay_params": ["type": "object", "description": "Parameters for the overlay tool (merged over its defaults)"],
+                                    "bonds": ["type": "boolean", "description": "Draw covalent bonds (distance criterion, Cordero radii) and, when the file carries residue labels, the Cα backbone trace (default false)"],
                                     "elements": ["type": "string", "description": "Type-token→element mapping, e.g. 'O,Al'"],
                                     "style": ["type": "string", "description": "'contrast' auto best-visibility preset"],
                                     "colors": ["type": "string", "description": "'O=red,Al=#3366ff'"],
@@ -294,6 +308,10 @@ let toolDefs: [[String: Any]] = [
                                     "frame": ["type": "string", "description": "'first', 'last' (default), or a 0-based index"],
                                     "charges": ["type": "boolean", "description": "Write extended-XYZ with per-atom charge (q) column"]],
                      "required": ["path", "out"]]],
+    ["name": "cloud_capabilities",
+     "description": "What the hosted GPU tier can run: LAMMPS version, installed packages, GPU-accelerated vs CPU-only styles. With `input`, preflights that deck the way submit_lammps host=cloud does — styles missing from the hosted image (the run would exit at startup), CPU-only styles, and whether the pair force will use the GPU. Nothing is submitted or billed.",
+     "inputSchema": ["type": "object",
+                     "properties": ["input": ["type": "string", "description": "Optional LAMMPS input path to preflight"]]]],
     ["name": "decimate",
      "description": "Keep every Nth frame of a trajectory (the final frame is always kept). Use to shrink huge trajectories before viewing.",
      "inputSchema": ["type": "object",
@@ -309,7 +327,8 @@ let toolDefs: [[String: Any]] = [
                                     "label": ["type": "string", "description": "Short slug for the job id"],
                                     "host": ["type": "string", "description": "Remote host name from hosts.json; 'cloud' = the hosted GPU tier (prepaid credits, API key via `mdengine login`); 'local' forces this machine; omitted = hosts.json default, else local"],
                                     "gpu": ["type": "string", "description": "host=cloud only: any (cheapest) | rtx4090 | a100"],
-                                    "wall_hours": ["type": "number", "description": "host=cloud only: hard wall-clock cap in hours (default 4; billed to the cap if hit)"]],
+                                    "wall_hours": ["type": "number", "description": "host=cloud only: hard wall-clock cap in hours (default 4; billed to the cap if hit)"],
+                                    "force": ["type": "boolean", "description": "host=cloud only: submit even when preflight says the deck would not use the GPU or needs styles the hosted image lacks"]],
                      "required": ["input"]]],
     ["name": "list_hosts",
      "description": "List the execution hosts configured in ~/.mdengine/hosts.json (ssh target, remote LAMMPS, workdir, launch template) and which is the default.",
@@ -361,13 +380,15 @@ private func ann(_ readOnly: Bool, destructive: Bool = false, idempotent: Bool =
 }
 let toolMeta: [String: [String: Any]] = [
     "trajectory_info": ["title": "Trajectory info",        "annotations": ann(true, idempotent: true)],
-    "z_profile":       ["title": "Depth (z) profile",      "annotations": ann(true, idempotent: true)],
+    "z_profile":       ["title": "Depth (z) profile (deprecated → analyze)", "annotations": ann(true, idempotent: true)],
+    "analyze":         ["title": "Analyze (registry tool)","annotations": ann(true, idempotent: true)],
     "render_video":    ["title": "Render trajectory video","annotations": ann(false, idempotent: true)],
     "render_image":    ["title": "Render frame image",     "annotations": ann(false, idempotent: true)],
     "export_frame":    ["title": "Export frame to XYZ",    "annotations": ann(false, idempotent: true)],
     "decimate":        ["title": "Decimate trajectory",    "annotations": ann(false, idempotent: true)],
     "submit_lammps":   ["title": "Submit LAMMPS job",      "annotations": ann(false, openWorld: true)],
     "list_hosts":      ["title": "List execution hosts",   "annotations": ann(true, idempotent: true)],
+    "cloud_capabilities": ["title": "Hosted tier capabilities / preflight", "annotations": ann(true, idempotent: true, openWorld: true)],
     "fetch_job":       ["title": "Fetch remote job outputs","annotations": ann(false, idempotent: true, openWorld: true)],
     "job_status":      ["title": "Job status",             "annotations": ann(true, idempotent: true, openWorld: true)],
     "job_log":         ["title": "Job log tail",           "annotations": ann(true, idempotent: true, openWorld: true)],
@@ -446,6 +467,121 @@ func mappedFrames(_ a: [String: Any], _ frames: [[Arv]]) -> [[Arv]] {
         spec.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
 }
 
+// MARK: - Analysis registry bridge (`analyze`)
+
+/// Full parse (atoms + box + per-atom columns) — analysis tools need more than
+/// `parseFrames`' bare atom lists.
+func parseTrajectoryFrames(path: String) throws -> Trajectory {
+    guard FileManager.default.fileExists(atPath: path) else { throw err("no such file: \(path)") }
+    // Side-file tools accept a run directory / .json / .csv as the anchor (no atoms needed).
+    var isDir: ObjCBool = false
+    if (FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue)
+        || ["json", "csv", "lammps", "log"].contains((path as NSString).pathExtension.lowercased()) {
+        return [Frame(atoms: [])]
+    }
+    let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int) ?? 0
+    guard size < 2_000_000_000 else {
+        throw err("\(path) is \(size / 1_000_000) MB (limit 2 GB) — decimate first")
+    }
+    let frames = try TrajectoryReader.parseTrajectory(contentsOf: URL(fileURLWithPath: path))
+    guard !frames.isEmpty else { throw err("no complete frames in \(path)") }
+    return frames
+}
+
+/// The registry catalogue, as JSON-ready dictionaries.
+func analysisCatalogue() -> [[String: Any]] {
+    ToolRegistry.shared.metadata.map { m in
+        var entry: [String: Any] = [
+            "id": m.id,
+            "title": m.title,
+            "category": m.category.title,
+            "functions": m.functions.map(\.rawValue),
+            "requirements": m.requirements.map(\.rawValue),
+            "supports_strided_preview": m.supportsStridedPreview,
+            "skill": "skills/tools/\(m.id)/SKILL.md",
+            "manual": "docs/manual/html/tools.html#\(m.id)",
+        ]
+        if let data = ToolRegistry.shared.tool(m.id)?.defaultParametersJSON,
+           let obj = try? JSONSerialization.jsonObject(with: data) {
+            entry["default_parameters"] = obj
+        }
+        return entry
+    }
+}
+
+/// Caller parameters layered over the tool's defaults (a malformed value falls
+/// back to the tool's own default for that field).
+func mergedParametersJSON(toolId: String, overrides: [String: Any]) throws -> Data {
+    guard let tool = ToolRegistry.shared.tool(toolId) else {
+        let ids = ToolRegistry.shared.metadata.map(\.id).joined(separator: ", ")
+        throw err("unknown tool '\(toolId)' — registered: \(ids)")
+    }
+    var merged = (try? JSONSerialization.jsonObject(with: tool.defaultParametersJSON))
+        as? [String: Any] ?? [:]
+    for (key, value) in overrides { merged[key] = value }
+    return (try? JSONSerialization.data(withJSONObject: merged)) ?? tool.defaultParametersJSON
+}
+
+/// Context for `index`; `reference_frame` (default 0) is attached for tools
+/// that measure change against another frame (Deformation).
+func analysisContext(_ a: [String: Any], frames: Trajectory, index: Int) -> AnalysisContext {
+    let ref = a["reference_frame"] as? Int ?? 0
+    let source = (a["path"] as? String).map { URL(fileURLWithPath: $0) }
+    let gen = abs((a["path"] as? String ?? "").hashValue) % 1_000_000 + 1   // stable within one process
+    guard frames.indices.contains(ref) else {
+        return AnalysisContext(frameIndex: index, sourceURL: source, trajectory: frames, trajectoryGeneration: gen)
+    }
+    return AnalysisContext(frameIndex: index, referenceFrame: frames[ref], referenceFrameIndex: ref, sourceURL: source,
+                           trajectory: frames, trajectoryGeneration: gen)
+}
+
+func resolveFrameIndex(_ spec: String, count: Int) throws -> Int {
+    switch spec {
+    case "last", "": return count - 1
+    case "first": return 0
+    default:
+        guard let i = Int(spec), (0..<count).contains(i) else {
+            throw err("frame must be 'first', 'last', or 0…\(count - 1)")
+        }
+        return i
+    }
+}
+
+/// "all" | "a-b" | "a-b:stride" → the frame indices to walk.
+func resolveFrameRange(_ spec: String, count: Int) throws -> [Int] {
+    if spec == "all" { return Array(0..<count) }
+    let parts = spec.split(separator: ":", omittingEmptySubsequences: false)
+    let bounds = parts[0].split(separator: "-", omittingEmptySubsequences: false)
+    guard parts.count <= 2, bounds.count == 2,
+          let lo = Int(bounds[0]), let hi = Int(bounds[1]),
+          let step = parts.count == 2 ? Int(parts[1]) : 1,
+          step >= 1, lo >= 0, hi < count, lo <= hi else {
+        throw err("frames must be 'all', 'a-b' or 'a-b:stride' within 0…\(count - 1)")
+    }
+    return Array(Swift.stride(from: lo, through: hi, by: step))
+}
+
+/// ToolResult as JSON; per-atom values are dropped unless asked for (they are
+/// one Float per atom — megabytes through a chat transcript).
+func resultJSONObject(_ result: ToolResult, includeField: Bool) throws -> [String: Any] {
+    let data = try JSONEncoder().encode(result)
+    guard var obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw err("could not encode the tool result")
+    }
+    if !includeField, var field = obj["field"] as? [String: Any] {
+        field["count"] = (field["values"] as? [Any])?.count ?? 0
+        field.removeValue(forKey: "values")
+        obj["field"] = field
+    }
+    return obj
+}
+
+func prettyJSON(_ object: Any) throws -> String {
+    let data = try JSONSerialization.data(withJSONObject: object,
+                                          options: [.prettyPrinted, .sortedKeys])
+    return String(decoding: data, as: UTF8.self)
+}
+
 // MARK: - Tool implementations
 
 func callTool(_ name: String, _ a: [String: Any]) throws -> String {
@@ -475,50 +611,67 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
         """ + fields + charges
 
     case "z_profile":
+        // Deprecated alias (GJOB-164): the registered ZProfileTool is the one implementation.
+        // substrate/probe map onto the tool's parameters; frame passes through unchanged.
+        var args: [String: Any] = ["tool": "z_profile"]
+        if let path = a["path"] { args["path"] = path }
+        if let frame = a["frame"] { args["frame"] = frame }
+        var params: [String: Any] = [:]
+        if let s = a["substrate"] as? String, !s.isEmpty { params["substrate"] = s }
+        if let p = a["probe"] as? String, !p.isEmpty { params["probe"] = p }
+        if !params.isEmpty { args["params"] = params }
+        return "note: z_profile is a deprecated alias of analyze(tool: \"z_profile\")\n"
+             + (try callTool("analyze", args))
+
+    case "analyze":
         guard let path = a["path"] as? String else { throw err("invalid arguments: path") }
-        let frames = try parseFrames(path: path)
-        let frame: [Arv]
-        var frameLabel = "last"
-        switch (a["frame"] as? String) ?? "last" {
-        case "last": frame = frames.last!
-        case "first": frame = frames.first!; frameLabel = "first"
-        case let s:
-            guard let i = Int(s), frames.indices.contains(i) else {
-                throw err("frame must be 'first', 'last', or 0…\(frames.count - 1)")
+        let toolId = (a["tool"] as? String) ?? ""
+        guard !toolId.isEmpty else {
+            return "registered analysis tools (pass one as `tool`):\n"
+                 + (try prettyJSON(analysisCatalogue()))
+        }
+        guard let tool = ToolRegistry.shared.tool(toolId) else {
+            let ids = ToolRegistry.shared.metadata.map(\.id).joined(separator: ", ")
+            throw err("unknown tool '\(toolId)' — registered: \(ids)")
+        }
+        var frames = try parseTrajectoryFrames(path: path)
+        var overrides = a["params"] as? [String: Any] ?? [:]
+        if frames.count == 1, frames[0].atoms.isEmpty {          // side-file anchor (dir / .json / .csv / log)
+            let key = ["fep_results": "jsonPath", "kinetics_tramd": "csvPath",
+                       "pulloff_energetics": "csvPath", "thermo": "logPath"][toolId]
+            if let key, !(path as NSString).pathExtension.isEmpty, overrides[key] == nil { overrides[key] = path }
+            if let f = a["frame"] as? String, let n = Int(f), n > 0 { frames = Array(repeating: Frame(atoms: []), count: n + 1) }
+            if let spec = a["frames"] as? String, !spec.isEmpty {
+                throw err("with a side file as `path`, use `frame` (row/edge index); pass the trajectory for `frames`")
             }
-            frame = frames[i]; frameLabel = "#\(i)"
         }
-        let defaults = ZProfileAnalysis.defaultElements(for: frame)
-        guard let substrate = (a["substrate"] as? String) ?? defaults?.substrate,
-              let probe = (a["probe"] as? String) ?? defaults?.probe else {
-            throw err("frame has fewer than two elements; pass substrate and probe explicitly")
+        let paramsJSON = try mergedParametersJSON(toolId: toolId, overrides: overrides)
+        let includeField = a["include_field"] as? Bool ?? false
+
+        // Time series: one scalar (+ summary) per frame, never the fields.
+        if let spec = a["frames"] as? String, !spec.isEmpty {
+            let indices = try resolveFrameRange(spec, count: frames.count)
+            var rows: [[String: Any]] = []
+            for i in indices {
+                let result = try tool.analyze(frame: frames[i],
+                                              context: analysisContext(a, frames: frames, index: i),
+                                              parametersJSON: paramsJSON)
+                var row: [String: Any] = ["frame": i]
+                if let s = result.scalar, s.isFinite { row["scalar"] = s }
+                let summary = try JSONEncoder().encode(result.summary)
+                row["summary"] = try JSONSerialization.jsonObject(with: summary)
+                rows.append(row)
+            }
+            return "file: \(path)  tool: \(toolId)  frames: \(indices.count) of \(frames.count)\n"
+                 + (try prettyJSON(["tool": toolId, "frames": rows]))
         }
-        guard let zp = ZProfileAnalysis(frame: frame, substrate: substrate, probe: probe) else {
-            throw err("no atoms of substrate '\(substrate)' or probe '\(probe)' in the frame (or they are the same)")
-        }
-        var lines = [
-            "file: \(path)  frame: \(frameLabel) of \(frames.count)",
-            "substrate: \(substrate)  probe: \(probe)",
-            String(format: "surface plane z = %.2f Å (top-5%% mean; single highest substrate atom z = %.2f)",
-                   zp.surfaceZ, zp.substrateMaxZ),
-            "probe atoms — penetrated: \(zp.penetrations.count), at surface (<\(String(format: "%.1f", ZProfileAnalysis.surfaceBand)) Å above): \(zp.atSurfaceCount), above/in flight: \(zp.aboveCount)",
-        ]
-        if let mx = zp.maxPenetration, let mn = zp.minPenetration, let mean = zp.meanPenetration {
-            lines.append(String(format: "penetration (Å below plane): min %.2f  mean %.2f  max %.2f", mn, mean, mx))
-            lines.append("depths: " + zp.penetrations.map { String(format: "%.2f", $0) }.joined(separator: " "))
-        } else {
-            lines.append("penetration: none (no probe atoms below the surface plane)")
-        }
-        if let q = zp.boundProbeMeanCharge {
-            lines.append(String(format: "bound probe mean charge: %+.3f e", q))
-        }
-        lines.append("z histogram rel. surface (negative = penetrated):")
-        for bin in zp.histogram where bin.count > 0 {
-            lines.append(String(format: "  %+6.1f…%+6.1f Å  %4d  %@",
-                                bin.range.lowerBound, bin.range.upperBound, bin.count,
-                                String(repeating: "#", count: min(60, bin.count))))
-        }
-        return lines.joined(separator: "\n")
+
+        let index = try resolveFrameIndex((a["frame"] as? String) ?? "last", count: frames.count)
+        let result = try tool.analyze(frame: frames[index],
+                                      context: analysisContext(a, frames: frames, index: index),
+                                      parametersJSON: paramsJSON)
+        return "file: \(path)  tool: \(toolId)  frame: \(index) of \(frames.count)\n"
+             + (try prettyJSON(try resultJSONObject(result, includeField: includeField)))
 
     case "render_video":
         guard let path = a["path"] as? String, let out = a["out"] as? String else {
@@ -577,9 +730,34 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
             annotations: a["annotations"] as? Bool ?? true,
             camera: parseCamera(a),
             style: try parseStyle(a, frame: iframes[frameIndex]))
+        // Optional per-atom colouring by an analysis tool (design §1: overlay = a colour source).
+        var overlayField: PerAtomField?
+        var overlayNote = ""
+        if let toolId = a["overlay"] as? String, !toolId.isEmpty {
+            guard let tool = ToolRegistry.shared.tool(toolId) else {
+                throw err("unknown overlay tool '\(toolId)' — call analyze without a tool for the catalogue")
+            }
+            let full = try parseTrajectoryFrames(path: path)
+            guard full.indices.contains(frameIndex) else { throw err("overlay: frame out of range") }
+            let params = try mergedParametersJSON(toolId: toolId, overrides: a["overlay_params"] as? [String: Any] ?? [:])
+            let result = try tool.analyze(frame: full[frameIndex],
+                                          context: analysisContext(a, frames: full, index: frameIndex),
+                                          parametersJSON: params)
+            guard let field = result.field else {
+                throw err("tool '\(toolId)' publishes no per-atom field (functions: \(tool.metadata.functions.map(\.rawValue).joined(separator: ", ")))")
+            }
+            overlayField = field
+            overlayNote = ", overlay \(toolId) (\(field.legendTitle))"
+        }
+        var bondSet: BondSet?
+        if a["bonds"] as? Bool == true {
+            let full = try parseTrajectoryFrames(path: path)
+            if full.indices.contains(frameIndex) { bondSet = BondPerception.perceive(frame: full[frameIndex]) }
+        }
         let dims = try VideoExporter.exportPNG(frames: iframes, frameIndex: frameIndex,
-                                               to: URL(fileURLWithPath: out), options: ioptions)
-        return "wrote \(out): frame \(frameIndex + 1)/\(iframes.count), \(dims.width)×\(dims.height)"
+                                               to: URL(fileURLWithPath: out), options: ioptions,
+                                               overlay: overlayField, bonds: bondSet)
+        return "wrote \(out): frame \(frameIndex + 1)/\(iframes.count), \(dims.width)×\(dims.height)\(overlayNote)"
 
     case "export_frame":
         guard let path = a["path"] as? String, let out = a["out"] as? String else {
@@ -618,10 +796,23 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
         guard let input = a["input"] as? String else { throw err("invalid arguments: input") }
         if (a["host"] as? String) == "cloud" {
             let client = try HostedClient.fromSavedCredentials()
-            let spec = HostedJobSpec(input: input, label: a["label"] as? String, gpu: a["gpu"] as? String ?? "any",
+            var spec = HostedJobSpec(input: input, label: a["label"] as? String, gpu: a["gpu"] as? String ?? "any",
                                      wallLimitS: Int(((a["wall_hours"] as? Double) ?? 4) * 3600))
+            // Preflight before spend (GJOB-118): missing styles or a CPU-only pair style stop the submit unless force=true.
+            // Routing (GJOB-116): a deck needing packages beyond the fast default image goes to lammps-full.
+            let caps = try? client.capabilities()
+            let (routed, pf) = DeckPreflight.route(input: URL(fileURLWithPath: (input as NSString).expandingTildeInPath), caps: caps)
+            let pfLines = pf.lines(rateHint: (caps?.rates?[spec.gpu] ?? caps?.rates?["any"]).map { String(format: "$%.2f/h", $0) })
+            if pf.needsAttention && (a["force"] as? Bool) != true {
+                throw err("not submitted — preflight:\n" + pfLines.joined(separator: "\n") + "\n"
+                          + (pf.ok ? "Pass force=true to run it on the pod's CPU cores anyway, or run it locally for free with submit_lammps host=local."
+                                   : "Pass force=true to submit anyway (it will fail at startup and bill the launch), or run it locally for free."))
+            }
+            spec.runner = routed
             let id = try client.submit(input: input, spec: spec)
-            return "submitted \(id) to the hosted GPU tier (\(client.base.host ?? "endpoint"), gpu \(spec.gpu), wall limit \(spec.wall_limit_s / 3600) h)\nlocal job dir: \(Jobs.dir(id).path)\npoll with job_status (live thermo tail); fetch_job downloads results when done"
+            return "submitted \(id) to the hosted GPU tier (\(client.base.host ?? "endpoint"), gpu \(spec.gpu), runner \(routed ?? caps?.defaultRunner ?? "lammps"), wall limit \(spec.wall_limit_s / 3600) h)"
+                 + (pfLines.isEmpty ? "" : "\npreflight: " + pfLines.joined(separator: "\npreflight: "))
+                 + "\nlocal job dir: \(Jobs.dir(id).path)\npoll with job_status (live thermo tail); fetch_job downloads results when done"
         }
         if let host = try RemoteHosts.resolve(a["host"] as? String) {
             let id = try RemoteJobs.submit(host: host, input: input, threads: a["threads"] as? Int,
@@ -631,6 +822,31 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
         let threads = a["threads"] as? Int ?? performanceCores()
         let id = try Jobs.submit(input: input, threads: threads, label: a["label"] as? String)
         return "submitted \(id)\njob dir: \(Jobs.dir(id).path)\npoll with job_status"
+
+    case "cloud_capabilities":
+        let client = try HostedClient.fromSavedCredentials()
+        let caps = try client.capabilities()
+        if let input = a["input"] as? String {
+            let (routed, pf) = DeckPreflight.route(input: URL(fileURLWithPath: (input as NSString).expandingTildeInPath), caps: caps)
+            let lines = pf.lines(rateHint: caps.rates?["any"].map { String(format: "$%.2f/h", $0) })
+            let verdict = !pf.ok ? "REFUSE: no hosted image has styles this deck needs" : pf.usesGPU == false ? "WARN: this deck would not use the GPU"
+                        : routed.map { "OK: routed to \($0)" } ?? "OK"
+            return "\(verdict)\n" + (lines.isEmpty ? "every style is available and the pair force runs on the GPU\n" : lines.joined(separator: "\n") + "\n")
+                 + "runner \(routed ?? caps.defaultRunner), gpu-accelerated \(pf.gpu.count), cpu-only \(pf.cpuOnly.count), missing \(pf.missing.count)"
+        }
+        var out: [String] = []
+        for (name, r) in caps.runners.sorted(by: { $0.key < $1.key }) {
+            var line = "\(name): \(r.engine ?? "?") \(r.lammps_version ?? "")"
+            if let img = r.image { line += "  image \(img)" }
+            if let p = r.packages { line += "\n  packages (\(p.count)): \(p.joined(separator: " "))" }
+            if let st = r.styles {
+                let pairs = st["pair"] ?? [:]
+                line += "\n  pair styles \(pairs.count) (GPU-accelerated \(pairs.values.filter(\.gpu).count)): " + pairs.filter { $0.value.gpu }.keys.sorted().joined(separator: " ")
+                for cat in ["fix", "compute", "kspace"] { if let t = st[cat] { line += "\n  \(cat): \(t.values.filter(\.gpu).count)/\(t.count) GPU-accelerated" } }
+            }
+            out.append(line)
+        }
+        return out.joined(separator: "\n") + "\nPass input=<deck.in> to preflight a deck."
 
     case "list_hosts":
         var cloud = "cloud: hosted GPU tier — "
@@ -776,7 +992,7 @@ while let line = readLine(strippingNewline: true) {
         let version = params?["protocolVersion"] as? String ?? "2025-06-18"
         reply(id, ["protocolVersion": version,
                    "capabilities": ["tools": [String: Any]()],
-                   "serverInfo": ["name": "mdengine", "version": "0.6.3"]])
+                   "serverInfo": ["name": "mdengine", "version": "0.7.0"]])
     case "ping":
         reply(id, [:])
     case "tools/list":

@@ -5,11 +5,59 @@ import LAMMPSCore
 import UniformTypeIdentifiers
 
 final class ContentViewModel: ObservableObject {
-    @Published var frames: [[Arv]] = []
-    @Published var frameIndex: Int = 0
+    @Published var frames: [[Arv]] = [] { didSet { syncInspectorFacts(); scheduleAnalyses() } }
+    /// Full frames (box, timestep, per-atom columns) for the analysis tools;
+    /// `frames` stays the renderer's view of the same atom arrays (COW, no copy).
+    var trajectory: Trajectory = []
+    /// Per-atom colours from the overlay tool for the frame on screen; nil =
+    /// element colours. NOT published and never passed through SwiftUI as a
+    /// value (100 k entries per tick): MetalView pulls it when `overlayGeneration` changes.
+    var overlayColors: [SIMD3<Float>]? = nil
+    @Published var overlayGeneration = 0
+    /// Perceived topology for the frame on screen (GJOB-145). Like
+    /// overlayColors: NOT published as a value — MetalView pulls it through
+    /// `bondsProvider` when `bondsGeneration` changes.
+    var bondSet: BondSet? = nil
+    @Published var bondsGeneration = 0
+    /// (trajectory generation, frame index) the cached `bondSet` belongs to;
+    /// a flag toggle re-publishes it instead of re-perceiving.
+    private var bondsComputedFor: (generation: Int, frame: Int) = (-1, -1)
+    private var lastBondsSubmit: CFAbsoluteTime = 0
+    private var lastBondFlags: (bonds: Bool, backbone: Bool) = (false, false)
+    /// Governor bookkeeping for the tool lanes (see ToolsController.swift).
+    var toolSubmitTimes: [String: CFAbsoluteTime] = [:]
+    var labelsGeneration = -1
+    var seriesCancelFlags: [String: Bool] = [:]
+    @Published var frameIndex: Int = 0 {
+        didSet { if frameIndex != oldValue { syncInspectorFacts(); scheduleAnalyses() } }
+    }
+    /// The inspector observes this, never the model (see InspectorState).
+    let inspector = InspectorState()
+    /// File the trajectory came from (nil for the bundled example); tools find side files next to it.
+    var sourceURL: URL?
     @Published var generation: Int = 0   // bumped per file load, drives GPU re-upload
     @Published var sourceName: String = ""
-    @Published var showInspector = false
+    @Published var showInspector = false { didSet { scheduleAnalyses() } }
+
+    init() {
+        loadToolPrefs()
+        lastBondFlags = (showBonds, showBackbone)
+        // The Display section's Bonds/Backbone toggles are @AppStorage, so
+        // they arrive here through UserDefaults.
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                let flags = (self.showBonds, self.showBackbone)
+                if flags != self.lastBondFlags {
+                    self.lastBondFlags = flags
+                    self.scheduleBonds(force: true)
+                }
+            }
+    }
+
+    deinit {
+        if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
+    }
     @Published var cameraResetToken = 0   // bumped by inspector's Reset Camera
 
     // MARK: Recent files (File ▸ Open Recent)
@@ -54,6 +102,102 @@ final class ContentViewModel: ObservableObject {
     /// The frame currently on screen.
     var atoms: [Arv] { frames.indices.contains(frameIndex) ? frames[frameIndex] : [] }
 
+    // MARK: - Analyses off the main thread (design §1b, GJOB-133)
+    //
+    // The inspector used to compute these inside its SwiftUI body — an
+    // O(N log N) pass over every atom on the main thread per playback tick.
+    // Now they run through AnalysisScheduler (latest request wins) and only
+    // while the inspector, and for the Z-profile its section, is on screen.
+
+    /// Element → count for the current frame (also feeds the summary bar).
+    var elementHistogram: [(String, Int)] { inspector.elementHistogram }
+    private var defaultsObserver: NSObjectProtocol?
+    /// Governor rule (design §1b): while playing, a tool's section is
+    /// refreshed at most this often — re-laying out the inspector on every
+    /// tick is what dropped 30 fps to 14 draws/s, not the analysis itself.
+    static let playbackRefreshInterval: CFAbsoluteTime = 0.25
+
+    /// The element histogram feeds the always-visible summary bar, so it runs
+    /// whenever the frame changes; analysis tools only while their section shows
+    /// (ToolsController). The Z-profile is one of those tools (GJOB-164).
+    func scheduleAnalyses() {
+        let frame = atoms
+        AnalysisScheduler.shared.submit(lane: "elements", atoms: frame.count, compute: { isCancelled in
+            var histogram: [String: Int] = [:]
+            for (n, a) in frame.enumerated() {
+                histogram[a.element, default: 0] += 1
+                if n & 0xFFFF == 0xFFFF, isCancelled() { return nil }
+            }
+            let sorted = histogram.sorted { ($0.value, $1.key) > ($1.value, $0.key) }
+                .map { ($0.key, $0.value) }
+            return sorted
+        }, onResult: { [weak self] (sorted: [(String, Int)]) in
+            self?.setInspectorElementHistogram(sorted)
+        })
+        scheduleBonds()
+        scheduleTools()
+    }
+
+    // MARK: - Bonds + backbone trace (GJOB-145)
+
+    /// Display ▸ Bonds. Read straight from UserDefaults (the toggle is
+    /// @AppStorage in the inspector) so there is one source of truth.
+    var showBonds: Bool { UserDefaults.standard.bool(forKey: "showBonds") }
+    /// Display ▸ Backbone trace.
+    var showBackbone: Bool { UserDefaults.standard.bool(forKey: "showBackbone") }
+    /// Escape hatch for the tolerance on the covalent-radius sum; unset =
+    /// 1.15. Handy for a system whose radii sit just outside the default
+    /// (fcc Al: nearest neighbour 2.86 Å against a 2.78 Å criterion).
+    var bondTolerance: Double {
+        let t = UserDefaults.standard.double(forKey: "bondTolerance")
+        return t > 0 ? t : BondPerception.defaultTolerance
+    }
+
+    /// What the renderer should draw: the cached set filtered by the two
+    /// flags. nil = points only.
+    func bondsForRenderer() -> BondSet? {
+        guard let set = bondSet else { return nil }
+        let filtered = BondSet(pairs: showBonds ? set.pairs : [],
+                               backbone: showBackbone ? set.backbone : [])
+        return filtered.isEmpty ? nil : filtered
+    }
+
+    /// Perceive bonds for the current frame on the "bonds" lane. Latest wins;
+    /// during playback at most one submission per `playbackRefreshInterval`,
+    /// and while a new set is in flight the renderer keeps the previous one.
+    func scheduleBonds(force: Bool = false) {
+        guard showBonds || showBackbone else {
+            if bondSet != nil {
+                bondSet = nil
+                bondsComputedFor = (-1, -1)
+                bondsGeneration += 1
+            }
+            return
+        }
+        guard let frame = currentFrame else { return }
+        // Both flags read the same perceived set, so a toggle only re-publishes.
+        if bondsComputedFor == (generation, frameIndex), bondSet != nil {
+            bondsGeneration += 1
+            return
+        }
+        if isPlaying && !force {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastBondsSubmit < Self.playbackRefreshInterval { return }
+        }
+        lastBondsSubmit = CFAbsoluteTimeGetCurrent()
+        let gen = generation, fi = frameIndex, tolerance = bondTolerance
+        AnalysisScheduler.shared.submit(lane: "bonds", atoms: frame.count,
+                                        compute: { isCancelled -> BondSet? in
+            BondPerception.perceive(frame: frame, tolerance: tolerance, isCancelled: isCancelled)
+        }, onResult: { [weak self] set in
+            guard let self, self.generation == gen else { return }
+            self.bondSet = set
+            self.bondsComputedFor = (gen, fi)
+            self.bondsGeneration += 1
+        })
+    }
+
+
     /// Load the bundled example trajectory (a Lennard-Jones argon melt,
     /// `lj_melt.xyz`, generated by the also-bundled `lj_melt.in` deck) — but
     /// only if no real file shows up first. Finder/`open <file>` events land
@@ -66,15 +210,35 @@ final class ContentViewModel: ObservableObject {
                 print("ContentViewModel: no bundled trajectory resource found")
                 return
             }
-            self.show(XYZParser.parseFrames(text), name: "LJ argon melt (bundled example)")
+            self.show(XYZParser.parseTrajectory(text), name: "LJ argon melt (bundled example)")
         }
     }
 
-    private func show(_ parsed: [[Arv]], name: String) {
-        frames = parsed
+    /// The frame on screen with its box and per-atom columns (tools read this).
+    var currentFrame: Frame? { trajectory.indices.contains(frameIndex) ? trajectory[frameIndex] : nil }
+
+    private func show(_ parsed: Trajectory, name: String) {
+        trajectory = parsed
+        frames = parsed.map(\.atoms)
         frameIndex = max(0, parsed.count - 1)   // open at the final state
         generation += 1
         sourceName = name
+        applyPerfHarness()
+    }
+
+    /// Shell-drivable performance gates (design §1b): `MDENGINE_INSPECTOR=1`
+    /// opens the inspector, `MDENGINE_AUTOPLAY=<fps>` starts looped playback
+    /// at that rate. Combined with `MDENGINE_PERF=1` the stderr log gives
+    /// idle draws/s and playback hitches without a hand on the mouse.
+    private func applyPerfHarness() {
+        let env = ProcessInfo.processInfo.environment
+        if env["MDENGINE_INSPECTOR"] != nil { showInspector = true }
+        if let fps = env["MDENGINE_AUTOPLAY"].flatMap(Double.init), frames.count > 1 {
+            playbackFPS = max(1, min(60, fps))
+            loopPlayback = true
+            frameIndex = 0
+            startPlayback()
+        }
     }
 
     // MARK: - View presets (Top/Front/… snap, from the viewport menu)
@@ -98,10 +262,10 @@ final class ContentViewModel: ObservableObject {
     /// Bumped only by Restore Defaults: forces element rows to rebuild with
     /// factory values. Kept separate from styleGeneration — recreating a row
     /// mid-edit would orphan an open color picker's binding.
-    @Published var styleResetToken = 0
+    @Published var styleResetToken = 0 { didSet { setInspectorStyleResetToken(styleResetToken) } }
 
     /// nil = idle; 0…1 while an export runs (drives the inspector progress bar).
-    @Published var exportProgress: Double?
+    @Published var exportProgress: Double? { didSet { setInspectorExportProgress(exportProgress) } }
     private var exportCancelled = false
 
     func cancelVideoExport() { exportCancelled = true }
@@ -135,6 +299,20 @@ final class ContentViewModel: ObservableObject {
             options.height = 360
             options.fps = min(fps, 15)
         }
+        options.overlay = overlayFieldProvider()
+        // Bonds in the movie match the window: same flags, same tolerance,
+        // perceived frame by frame on the export's own queue.
+        if showBonds || showBackbone {
+            let traj = trajectory, tolerance = bondTolerance, wantSticks = showBonds
+            options.bonds = { i in
+                guard traj.indices.contains(i),
+                      var set = BondPerception.perceive(frame: traj[i], tolerance: tolerance)
+                else { return nil }
+                if !wantSticks { set.pairs = [] }
+                return set
+            }
+            options.showBackbone = showBackbone
+        }
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [format == .mp4 ? .mpeg4Movie : .gif]
@@ -167,36 +345,6 @@ final class ContentViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Z-profile export (CSV / Excel, always the trajectory's LAST frame)
-
-    enum ZProfileExportFormat { case csv, xlsx }
-
-    func exportZProfile(substrate: String, probe: String, format: ZProfileExportFormat) {
-        guard let last = frames.last,
-              let zp = ZProfileAnalysis(frame: last, substrate: substrate, probe: probe)
-        else { return }
-        let ext = format == .csv ? "csv" : "xlsx"
-        let panel = NSSavePanel()
-        if let type = UTType(filenameExtension: ext) { panel.allowedContentTypes = [type] }
-        let base = sourceName.isEmpty ? "trajectory"
-            : (sourceName as NSString).deletingPathExtension
-        panel.nameFieldStringValue = "\(base)-zprofile.\(ext)"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            switch format {
-            case .csv:
-                try ZProfileExport.csv(analysis: zp, frame: last,
-                                       frameIndex: frames.count - 1, source: sourceName)
-                    .write(to: url, atomically: true, encoding: .utf8)
-            case .xlsx:
-                try ZProfileExport.writeXLSX(to: url, analysis: zp, frame: last,
-                                             frameIndex: frames.count - 1, source: sourceName)
-            }
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } catch {
-            Self.alert("Z-profile export failed", info: error.localizedDescription)
-        }
-    }
 
     // MARK: - Playback
 
@@ -216,6 +364,7 @@ final class ContentViewModel: ObservableObject {
     func startPlayback() {
         guard frames.count > 1 else { return }
         isPlaying = true
+        setInspectorPlaying(true)
         playTimer?.invalidate()
         playTimer = Timer.scheduledTimer(withTimeInterval: 1 / max(1, playbackFPS),
                                          repeats: true) { [weak self] _ in
@@ -227,6 +376,8 @@ final class ContentViewModel: ObservableObject {
         isPlaying = false
         playTimer?.invalidate()
         playTimer = nil
+        setInspectorPlaying(false)
+        scheduleTools(force: true)  // sections were frozen while playing
     }
 
     private func stepPlayback() {
@@ -266,14 +417,15 @@ final class ContentViewModel: ObservableObject {
         watchedSize = size
         refreshInFlight = true
         parseQueue.async { [weak self] in
-            let parsed = (try? TrajectoryReader.parseFrames(contentsOf: url)) ?? []
+            let parsed = (try? TrajectoryReader.parseTrajectory(contentsOf: url)) ?? []
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.refreshInFlight = false
                 guard self.watchedURL == url,                    // not replaced meanwhile
                       parsed.count != self.frames.count, !parsed.isEmpty else { return }
                 let wasAtEnd = self.frameIndex >= self.frames.count - 1
-                self.frames = parsed
+                self.trajectory = parsed
+                self.frames = parsed.map(\.atoms)
                 self.generation += 1
                 self.frameIndex = wasAtEnd ? parsed.count - 1 : min(self.frameIndex, parsed.count - 1)
             }
@@ -309,7 +461,7 @@ final class ContentViewModel: ObservableObject {
         sourceName = "Loading \(url.lastPathComponent)…"
         isLoading = true
         parseQueue.async { [weak self] in
-            let loaded = try? TrajectoryReader.parseFrames(contentsOf: url)
+            let loaded = try? TrajectoryReader.parseTrajectory(contentsOf: url)
             let parsed = loaded ?? []
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -328,6 +480,7 @@ final class ContentViewModel: ObservableObject {
                                    + "Trajectories open at their final frame — scrub with the timeline.")
                     return
                 }
+                self.sourceURL = url
                 self.show(parsed, name: url.lastPathComponent)
                 self.noteRecent(url)
                 self.watch(url: url, knownSize: size)
@@ -367,7 +520,7 @@ final class ContentViewModel: ObservableObject {
         return nil
     }
 
-    private static func alert(_ message: String, info: String) {
+    static func alert(_ message: String, info: String) {
         let a = NSAlert()
         a.messageText = message
         a.informativeText = info

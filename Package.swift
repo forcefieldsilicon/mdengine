@@ -5,6 +5,9 @@ let package = Package(
     name: "MDEngine",
     platforms: [
         .macOS(.v14),
+        // iOS for the run-tracker app (GJOB-121). Only LAMMPSCore is expected to build here -- it is
+        // Foundation-only, including HostedClient; MDRender is Metal/AppKit and the executables are macOS.
+        .iOS(.v17),
     ],
     products: [
         // Products define the executables and libraries a package produces.
@@ -15,6 +18,10 @@ let package = Package(
         .library(
             name: "MDRender",
             targets: ["MDRender"]
+        ),
+        .library(
+            name: "MDEngineRunsUI",
+            targets: ["MDEngineRunsUI"]
         ),
         .executable(
             name: "MDEngine",
@@ -42,6 +49,13 @@ let package = Package(
             name: "MDRender",
             dependencies: ["LAMMPSCore"]
         ),
+        // The iOS run tracker's screens and logic (GJOB-121/122). A library, not an app: it builds for iOS
+        // AND macOS so `swift build` and `swift test` cover it before any Xcode project exists, and the app
+        // target stays a thin shell around RunsRootView.
+        .target(
+            name: "MDEngineRunsUI",
+            dependencies: ["LAMMPSCore"]
+        ),
         .executableTarget(
             name: "MDEngine",
             dependencies: [
@@ -64,7 +78,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AppTests",
-            dependencies: ["LAMMPSCore"]
+            dependencies: ["LAMMPSCore", "MDRender", "MDEngineRunsUI"]
         ),
     ]
 )

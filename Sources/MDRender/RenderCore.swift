@@ -1,5 +1,6 @@
 import simd
 import Foundation
+import LAMMPSCore
 
 /// Rendering primitives shared by the app's interactive Metal view and the
 /// offscreen video renderer — one shader, one camera math, one palette, so
@@ -17,6 +18,67 @@ public enum RenderCore {
             self.color = color
             self.size = size
         }
+    }
+
+    /// One vertex per line endpoint; layout must match `Line` in the line
+    /// shader. Bonds and the backbone trace share the buffer — they differ
+    /// only in colour, so one draw call covers both.
+    public struct LineVertex {
+        public var position: SIMD3<Float>
+        public var color: SIMD3<Float>
+        public init(position: SIMD3<Float>, color: SIMD3<Float>) {
+            self.position = position
+            self.color = color
+        }
+    }
+
+    /// Backbone traces are drawn in a fixed light grey rather than in the
+    /// chain's atom colours: the trace is a schematic, and colouring it per
+    /// chain would compete with whatever the overlay is already saying with
+    /// colour. 0.85 reads clearly on the app's near-black default background
+    /// and stays visible on a light one.
+    public static let backboneColor = SIMD3<Float>(repeating: 0.85)
+
+    /// Line geometry for one frame, in the SAME model space as the render
+    /// atoms (caller normalizes positions first).
+    ///
+    /// Each bond becomes two *half* segments meeting at the midpoint, coloured
+    /// by their own atom — the standard half-bond convention, so an O–H stick
+    /// reads red then white instead of picking one atom's colour and lying
+    /// about the other. `colors` shorter than `positions` falls back to white,
+    /// and out-of-range indices are skipped (a stale bond set against a
+    /// smaller frame must never crash the renderer).
+    public static func lineVertices(bonds: BondSet,
+                                    positions: [SIMD3<Float>],
+                                    colors: [SIMD3<Float>]) -> [LineVertex] {
+        let n = positions.count
+        guard n > 0 else { return [] }
+        let white = SIMD3<Float>(repeating: 1)
+        func color(_ i: Int) -> SIMD3<Float> { i < colors.count ? colors[i] : white }
+
+        var out: [LineVertex] = []
+        out.reserveCapacity(bonds.pairs.count * 2 + bonds.backbone.reduce(0) { $0 + $1.count * 2 })
+
+        for k in stride(from: 0, to: bonds.pairs.count - 1, by: 2) {
+            let i = Int(bonds.pairs[k]), j = Int(bonds.pairs[k + 1])
+            guard i < n, j < n else { continue }
+            let a = positions[i], b = positions[j]
+            let mid = (a + b) * 0.5
+            out.append(LineVertex(position: a, color: color(i)))
+            out.append(LineVertex(position: mid, color: color(i)))
+            out.append(LineVertex(position: mid, color: color(j)))
+            out.append(LineVertex(position: b, color: color(j)))
+        }
+
+        for chain in bonds.backbone where chain.count >= 2 {
+            for k in 0..<(chain.count - 1) {
+                let i = Int(chain[k]), j = Int(chain[k + 1])
+                guard i < n, j < n else { continue }
+                out.append(LineVertex(position: positions[i], color: backboneColor))
+                out.append(LineVertex(position: positions[j], color: backboneColor))
+            }
+        }
+        return out
     }
 
     /// Must match `Uniforms` in the shader. `maxPointSize` scales with output
@@ -183,6 +245,49 @@ public enum RenderCore {
         float r2 = dot(d, d);
         if (r2 > 0.25) discard_fragment();
         float shade = 1.0 - r2 * 2.2;
+        return float4(in.color * shade, 1.0);
+    }
+    """
+
+    /// Bonds and backbone. Same `Uniforms` (same mvp, same buffer index) as
+    /// the atom shader, so one uniform upload serves both passes. The
+    /// fragment shader dims the far end slightly with clip-space depth, which
+    /// is the cheapest cue that keeps a dense bond cage from reading flat.
+    public static let lineShaderSource = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Line {
+        float3 position;
+        float3 color;
+    };
+
+    struct Uniforms {
+        float4x4 mvp;
+        float pointSize;
+        float maxPointSize;
+    };
+
+    struct LineOut {
+        float4 position [[position]];
+        float3 color;
+        float  depth;
+    };
+
+    vertex LineOut line_vertex_main(const device Line* lines [[buffer(0)]],
+                                    constant Uniforms& u [[buffer(1)]],
+                                    uint id [[vertex_id]]) {
+        LineOut out;
+        out.position = u.mvp * float4(lines[id].position, 1.0);
+        out.color = lines[id].color;
+        // 0 at the near plane, 1 at the far one; clamped so an orthographic
+        // camera (w == 1) still lands in range.
+        out.depth = clamp(out.position.z / max(out.position.w, 0.0001), 0.0, 1.0);
+        return out;
+    }
+
+    fragment float4 line_fragment_main(LineOut in [[stage_in]]) {
+        float shade = 1.0 - 0.35 * in.depth;
         return float4(in.color * shade, 1.0);
     }
     """

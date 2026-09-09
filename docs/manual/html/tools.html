@@ -1,0 +1,1131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MDEngine User Manual — Analysis tools</title>
+<style>
+  :root{
+    --ink:#1c1a18; --muted:#6b645f; --rule:#ddd6d0; --accent:#b23a2e;
+    --bg:#faf8f6; --code:#f0ebe7;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e8e3de; --muted:#9a918b; --rule:#3a3532; --accent:#f0705e;
+           --bg:#171514; --code:#242020; }
+  }
+  body{ margin:0; background:var(--bg); color:var(--ink);
+        font:16px/1.6 -apple-system, "Helvetica Neue", sans-serif; }
+  main{ max-width:44rem; margin:0 auto; padding:3rem 1.5rem 5rem; }
+  h1{ font-size:2rem; margin:.2rem 0 0; letter-spacing:-.02em; }
+  .sub{ color:var(--muted); margin:0 0 2.5rem; }
+  h2{ font-size:1.25rem; margin:2.4rem 0 .6rem; padding-top:1.2rem;
+      border-top:1px solid var(--rule); }
+  h3{ font-size:.95rem; margin:1.4rem 0 .3rem; text-transform:uppercase;
+      letter-spacing:.06em; color:var(--muted); }
+  kbd, code{ background:var(--code); border:1px solid var(--rule); border-radius:4px;
+       padding:.08em .4em; font:0.85em ui-monospace, Menlo, monospace; }
+  table{ border-collapse:collapse; width:100%; margin:.8rem 0; }
+  th, td{ text-align:left; padding:.45rem .6rem; border-bottom:1px solid var(--rule);
+          vertical-align:top; }
+  th{ font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  .tag{ color:var(--accent); font-weight:600; }
+  pre{ background:var(--code); border:1px solid var(--rule); border-radius:6px;
+       padding:.9rem 1rem; overflow-x:auto; font-size:.85em; line-height:1.5; }
+  p.note{ color:var(--muted); font-size:.9em; }
+  a{ color:var(--accent); }
+  .badge{ display:inline-block; border:1px solid var(--rule); background:var(--code);
+          border-radius:999px; padding:.05em .6em; margin-right:.3em;
+          font-size:.75em; letter-spacing:.03em; color:var(--muted); }
+  .soon{ color:var(--muted); font-size:.85em; font-style:italic; }
+</style>
+</head>
+<body>
+<main>
+  <p class="tag">MDEngine · ForceField Silicon</p>
+  <h1>Analysis tools</h1>
+  <p class="sub">One catalogue of studies — in the inspector, in the shell, and to an agent.
+  <a href="index.html">← back to the User Manual</a></p>
+
+  <h2>How the catalogue is organised</h2>
+  <p>An analysis <b>tool</b> is one study you run on one frame: it returns a
+  summary table, optionally a per-atom field, a binned profile, one scalar worth
+  plotting over time, and notes (caveats such as “preview, 1/4 of atoms”). Every
+  tool — built in today, scripted later — returns that same shape, which is why
+  the inspector, the CSV export, the CLI and the MCP server each need only one
+  renderer.</p>
+
+  <p>Tools are grouped by the <b>use case you arrived with</b>, not by the maths:
+  <em>Surfaces &amp; deposition</em>, <em>Adhesion &amp; binding</em>,
+  <em>Mechanics &amp; deformation</em>, <em>Structure &amp; order</em>,
+  <em>Rendering &amp; export</em>. What a tool <i>produces</i> is shown as
+  function badges, and badges are what compose: anything with
+  <span class="badge">profile</span> draws a chart, anything with
+  <span class="badge">perAtomField</span> can colour the atoms, anything with
+  <span class="badge">timeSeries</span> can be swept across frames.</p>
+
+  <table>
+    <tr><th>Badge</th><th>Means</th></tr>
+    <tr><td><span class="badge">perAtomField</span></td>
+        <td>One number per atom — drives the colour overlay and its legend.</td></tr>
+    <tr><td><span class="badge">profile</span></td>
+        <td>A binned curve along an axis (bin edges, values, counts) — the chart, and the CSV.</td></tr>
+    <tr><td><span class="badge">scalar</span></td>
+        <td>The single number worth watching (max penetration, mean charge…).</td></tr>
+    <tr><td><span class="badge">timeSeries</span></td>
+        <td>That scalar is meaningful frame after frame, so it can be swept.</td></tr>
+  </table>
+
+  <p>A tool also declares what it <b>requires</b> — a periodic box, a reference
+  (t=0) frame, atom groups, or a side file. A tool whose requirement the data
+  cannot meet greys out rather than returning a number that is quietly wrong.</p>
+
+  <p class="note">Agent playbooks: every tool has a skill file at <code>skills/tools/&lt;id&gt;/SKILL.md</code>
+  (decisions, parameters, how to run, how to read the result, caveats, pointers) and there are subject
+  skills for MD-AFM adhesion, the MD→DFT→MLIP accuracy loop and potential selection under
+  <code>skills/</code>. The MCP <code>analyze</code> catalogue returns the skill and manual path per tool.</p>
+
+  <h2>Running a tool</h2>
+  <p><b>In the app</b> <span class="soon">(inspector, phase 0c — the Tools area
+  is landing now; described here as designed)</span>: Inspector ▸ Tools lists the
+  catalogue by category. You <b>enable</b> a tool to add it to the frame's pass,
+  and <b>expand</b> it to compute and read its results — an enabled tool that is
+  collapsed still contributes its overlay, and nothing is computed for a tool you
+  never enabled. Results update live while scrubbing, during playback, and as a
+  followed file grows; during playback a cost governor may defer an expensive
+  tool, and tools that support a <b>strided preview</b> can run on a subset of
+  atoms while you drag (the result says so in its notes). A tool with a per-atom
+  field can drive the viewport <b>overlay</b> and its <b>legend</b>; a tool with a
+  profile draws a <b>chart</b>; every tool <b>exports</b> to CSV or to an Excel
+  workbook (Summary, Profile, Series and — up to 100&nbsp;000 atoms — the per-atom
+  Field as sheets; the .xlsx is written in-process, no system zip), and the current view
+  <b>snapshots</b> to PNG through the same Metal renderer as
+  <code>render_image</code>.</p>
+
+  <p><b>In the shell and to an agent</b> the catalogue is the same, with the same
+  parameters and the same numbers:</p>
+<pre>mdengine analyze                                   # the catalogue as a table
+mdengine analyze z_profile dump.lammpstrj --frame last
+mdengine analyze column_field dump.lammpstrj --param column=c_pe --param bins=40
+mdengine analyze z_profile dump.lammpstrj --all --csv depth.csv
+mdengine analyze column_field dump.lammpstrj --frames 0-200:10 --json</pre>
+  <p>Options: <code>--frame first|last|N</code> (default <code>last</code>),
+  <code>--all</code> or <code>--frames a-b[:stride]</code> for a time series,
+  <code>--param key=value</code> (repeatable; values are typed as int, float,
+  <code>true</code>/<code>false</code>, else string) or
+  <code>--params '{"bins":40}'</code> for nested parameters,
+  <code>--json</code> for the raw result, <code>--csv out.csv</code> for the
+  summary rows, then the profile bins, then one row per frame.</p>
+
+  <p>Agents reach the identical surface through the MCP tool
+  <code>analyze</code>: call it without <code>tool</code> to get the catalogue
+  (ids, categories, badges, requirements, default parameters), then with
+  <code>{tool, path, frame | frames, params}</code> for the result as JSON.
+  Per-atom field <em>values</em> are omitted unless
+  <code>include_field: true</code> is passed — one float per atom is megabytes of
+  transcript — so by default you get the palette, the legend title and the atom
+  count. Parameters are merged over the tool's defaults; a value a tool cannot
+  decode falls back to that tool's default for the field.</p>
+
+  <h2 id="z_profile">z_profile — Z-profile</h2>
+  <p><span class="badge">profile</span><span class="badge">scalar</span><span
+  class="badge">timeSeries</span> Surfaces &amp; deposition · no requirements ·
+  strided preview supported</p>
+
+  <h3>Method</h3>
+  <p>Depth analysis of a deposition or oxidation frame. Two species are chosen —
+  the <b>substrate</b> (the slab) and the <b>probe</b> (the deposited species);
+  by default the most abundant element and the second most abundant. The
+  <b>surface plane</b> is the mean z of the top 5% of substrate atoms, which is
+  robust against a few strays and against roughness in a way the single highest
+  atom is not (that atom's z is reported alongside, so you can see the
+  difference). Probe atoms are then classified against that plane: <b>penetrated</b>
+  (below it, with min/mean/max depth), <b>at surface</b> (within 2.5 Å above it),
+  and <b>above</b> (still in flight). When the file carries charges, the mean
+  charge of bound probes is reported. The profile bins probe atoms by
+  <code>z − surface</code>; bin width is <code>max(0.5 Å, range/bins)</code> and
+  the last bin is closed at the top, so the highest atom is never dropped. The
+  scalar is the maximum penetration (0 when nothing has penetrated).</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>substrate</code></td><td>string or null</td><td>null</td>
+        <td>Substrate element / type token. Null = the most abundant species in the frame.</td></tr>
+    <tr><td><code>probe</code></td><td>string or null</td><td>null</td>
+        <td>Deposited species. Null = the second most abundant.</td></tr>
+    <tr><td><code>bins</code></td><td>integer</td><td>12</td>
+        <td>Requested bin count for the depth histogram (the 0.5 Å floor can yield more).</td></tr>
+    <tr><td><code>profileOf</code></td><td>object</td><td><code>{"kind":"composition"}</code></td>
+        <td>What the bins hold: <code>composition</code> = probe-atom counts;
+            <code>charge</code> = mean probe charge per bin;
+            <code>{"kind":"field","name":"c_pe"}</code> = mean of that per-atom
+            column per bin (falls back to counts, with a note, when the frame has
+            no such column).</td></tr>
+  </table>
+  <p class="note">Nested values like <code>profileOf</code> need
+  <code>--params '{"profileOf":{"kind":"charge"}}'</code> — <code>--param</code>
+  sets top-level keys only.</p>
+
+  <h3>Reference</h3>
+  <p>Depth-resolved profiles along the surface normal are the standard reading of
+  a deposition or oxidation trajectory; the specific surface-plane definition here
+  (mean z of the top 5% of substrate atoms, chemisorbed band 2.5 Å) is MDEngine's
+  own convention rather than a standard — report it with the numbers. The
+  implementation is <code>Sources/LAMMPSCore/Analysis/ZProfileTool.swift</code>,
+  which wraps the app's original <code>ZProfileAnalysis</code> unchanged, with the
+  bin geometry in <code>Binning.swift</code>. The MCP <code>z_profile</code> tool
+  is the same analysis with a text readout and is kept for compatibility;
+  <code>analyze</code> is where new parameters appear.</p>
+
+  <h3>Validation</h3>
+  <p><code>testZProfileToolDefaultMatchesZProfileAnalysis</code> asserts that the
+  registered tool reproduces the original analysis exactly at default parameters,
+  and <code>testBinningReproducesZProfileHistogramExactly</code> that the
+  generalised binning matches the original histogram bin for bin;
+  <code>testZProfileToolProfilesChargeAndFields</code> covers the
+  <code>charge</code> and <code>field</code> modes, and
+  <code>testZProfileToolRoundTripsParametersAndRegisters</code> the JSON
+  parameter path used by the CLI and MCP. End-to-end:
+  <code>scripts/smoke_analyze.sh</code>.</p>
+
+  <h2 id="column_field">column_field — Colour by column</h2>
+  <p><span class="badge">perAtomField</span><span class="badge">profile</span><span
+  class="badge">scalar</span><span class="badge">timeSeries</span> Rendering
+  &amp; export · no requirements · strided preview supported</p>
+
+  <h3>Method</h3>
+  <p>Colours atoms by any per-atom quantity the frame carries: a coordinate
+  (<code>x</code>, <code>y</code>, <code>z</code>), the charge
+  (<code>charge</code>, when the file has <code>q</code>), or any numeric column a
+  LAMMPS dump or extended-XYZ brought along (<code>c_pe</code>, <code>vx</code>,
+  …). One pass over the atoms gives min, mean, max and standard deviation; the
+  colour range is the frame's own min…max unless you pin it (pin it when
+  comparing frames — an auto range re-scales every frame). The field is published
+  with a continuous palette and a legend title, and a second pass bins the same
+  quantity along an axis, so the chart shows its mean versus depth. The scalar is
+  the mean. Asking for a column the frame does not have is an error that lists the
+  columns it does have.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>column</code></td><td>string</td><td><code>"z"</code></td>
+        <td><code>x</code> / <code>y</code> / <code>z</code> / <code>charge</code>,
+            or any numeric per-atom column name in the file.</td></tr>
+    <tr><td><code>colormap</code></td><td>string</td><td><code>"viridis"</code></td>
+        <td>Named colour ramp carried in the palette for the renderer and legend.</td></tr>
+    <tr><td><code>rangeMin</code></td><td>number or null</td><td>null</td>
+        <td>Low end of the colour range. Null = this frame's minimum (auto).</td></tr>
+    <tr><td><code>rangeMax</code></td><td>number or null</td><td>null</td>
+        <td>High end. Null = this frame's maximum. Pin both for a fixed scale across frames.</td></tr>
+    <tr><td><code>profileAxis</code></td><td><code>"x"</code>/<code>"y"</code>/<code>"z"</code></td>
+        <td><code>"z"</code></td><td>Axis the profile bins along.</td></tr>
+    <tr><td><code>bins</code></td><td>integer</td><td>24</td>
+        <td>Requested bin count (same 0.5 Å floor on bin width).</td></tr>
+  </table>
+
+  <h3>Reference</h3>
+  <p>The same idea as a colour-coding modifier in OVITO or “colour by property”
+  in VMD, kept deliberately generic so that a quantity computed anywhere — by
+  LAMMPS into a dump column, or by another tool into the frame — can be seen and
+  profiled without new code. Implementation:
+  <code>Sources/LAMMPSCore/Analysis/ColumnFieldTool.swift</code>.</p>
+
+  <h3>Validation</h3>
+  <p><code>testColumnsAndZDefault</code> covers the coordinate path and the
+  discovery of available columns, <code>testDataColumnAndFixedRange</code> a data
+  column with a pinned colour range, and
+  <code>testRegistryRoundTripThroughJSON</code> the parameters-as-JSON path that
+  the CLI and MCP use. The coordinate statistics are cross-checkable by hand
+  against the bounding box from <code>mdengine info</code>. End-to-end:
+  <code>scripts/smoke_analyze.sh</code>.</p>
+
+  <h2 id="adhesion">adhesion — Adhesion</h2>
+  <p><span class="badge">field</span><span class="badge">scalar</span><span
+  class="badge">timeSeries</span> Adhesion &amp; binding · needs groups ·
+  no strided preview</p>
+
+  <h3>Method</h3>
+  <p>Two groups, <b>A</b> (receptor / substrate) and <b>B</b> (ligand / probe), are
+  selected by extended-XYZ labels (<code>chain</code>, then <code>resname</code>),
+  by element sets, or by a spatial slab; with no explicit selectors the two most
+  populous chains (else residue names, else elements) are used and the choice is
+  written into the notes. <b>Contacts</b> are heavy-atom A–B pairs closer than the
+  cutoff (4.5 Å, the usual protein contact criterion), each pair counted once, via
+  the shared cell-list neighbour finder. <b>Hydrogen bonds</b> follow Baker &amp;
+  Hubbard: donor N/O with a bonded H (H within 1.2 Å), acceptor N/O of the other
+  group, D···A &lt; 3.5 Å and D–H···A &gt; 120°, counted in both directions; a
+  frame without hydrogens reports polar N/O–N/O contacts by distance only and says
+  so. <b>Separation</b> is the mass-weighted COM–COM distance (minimum image when a
+  box exists) and the minimum interface distance. With <code>resname</code> +
+  <code>resid</code> labels the five A residues with most contacts are listed —
+  the "where does it stick" map. The per-atom field marks atoms in contact (A
+  orange, B cyan) for the overlay. The scalar is the contact count, so the chart
+  over frames is the binding history; <code>ruptureFrame</code> = the first frame
+  from which contacts stay at zero.</p>
+
+  <!-- Splice into tools.html, inside "adhesion — Adhesion", after <h3>Method</h3>'s
+     paragraph and before <h3>Parameters</h3>. Fragment only: no <html>/<body>. -->
+
+  <h3>Interaction fingerprint</h3>
+  <p>Contacts say how much interface there is; the fingerprint says <em>what holds
+  it</em>. It is name-based chemistry, so it needs the extended XYZ's
+  <code>name</code> column (PDB atom name) alongside <code>chain</code>,
+  <code>resname</code> and <code>resid</code> — <code>smd_pull.py</code> writes all
+  four. Without <code>name</code> the tool reports contacts and H-bonds only and
+  says so in the notes rather than guessing. Criteria are the conventional ones
+  (PLIP / Arpeggio family):</p>
+  <table>
+    <tr><th>Interaction</th><th>Criterion</th></tr>
+    <tr><td>Salt bridge</td>
+        <td>Cationic N (LYS NZ, ARG NH1/NH2/NE, HIS/HIP ND1/NE2) to anionic O
+            (ASP OD1/OD2, GLU OE1/OE2, any <code>OXT</code>) closer than
+            <code>saltBridgeCutoff</code> (4.0 Å). One residue pair counts once,
+            however many atom pairs qualify.</td></tr>
+    <tr><td>π-stacking</td>
+        <td>Aromatic rings (PHE, TYR, TRP — both rings, HIS): centroids &lt; 5.5 Å
+            apart, and either inter-plane angle &lt; 30° with lateral offset &lt; 2.0 Å
+            (<b>face-to-face</b>) or 60–90° (<b>T-shaped</b>). Both types are reported
+            separately. The ring normal is the best-conditioned centroid-relative
+            cross product, so atom order in the file cannot flip it.</td></tr>
+    <tr><td>Cation–π</td>
+        <td>LYS NZ or ARG CZ within 6.0 Å of a ring centroid of the other group.</td></tr>
+    <tr><td>Hydrophobic</td>
+        <td>A side-chain carbon (CB onward) of ALA VAL LEU ILE MET PHE TRP PRO TYR
+            within 4.0 Å of a carbon of the other group; residue pair counted once.</td></tr>
+  </table>
+  <p>The per-atom field switches with <code>quantity</code>:
+  <code>"contacts"</code> (the default, 0 none / 1 A / 2 B) or
+  <code>"interactions"</code> — 0 none, 1 contact A, 2 contact B, 3 H-bond partner,
+  4 salt bridge, 5 π-stack or cation–π, 6 hydrophobic. An atom that qualifies for
+  several takes the most specific: salt bridge &gt; π &gt; H-bond &gt; hydrophobic
+  &gt; contact. Below the contact rows a per-residue table lists the eight
+  group-A residues with most interactions, broken down by type.</p>
+
+  <h3>Occupancy and lifetimes</h3>
+  <p>With a whole trajectory loaded (<code>lifetimes</code>, default true) the tool
+  also reports, over every frame: <b>H-bond occupancy</b> — the fraction of frames
+  each donor–acceptor pair is bonded — and <b>mean lifetime</b>, the mean length of
+  a continuous bonded run times the frame interval (from <code>report_interval_ps</code>
+  in <code>config.json</code>; in frames, labelled as such, when no interval is
+  known), top ten pairs by occupancy; and <b>contact frequency</b> per group-A
+  residue. That table replaces "which residues touch in this one frame" with the
+  question the study actually asks. The walk is O(frames × atoms), so it is cached
+  per trajectory generation plus parameters and polls cancellation between frames —
+  the app expands the section, and only then is it paid for, once.</p>
+
+  <h3>MM/GBSA side files</h3>
+  <p>When <code>mmgbsa.py</code> (delivery module 1) has been run over the same
+  trajectory, its two CSVs are picked up beside the trajectory — the same search
+  <code>force_curve.csv</code> uses (next to it, a <code>results*/</code> sibling, or
+  the run directory above). <code>mmgbsa.csv</code> adds
+  <b>ΔG<sub>bind</sub></b> for the current frame plus mean ± sd over the file, and its
+  vdW / electrostatic / solvation split; <code>interaction_energy.csv</code> adds
+  ΔE<sub>vdW</sub> and ΔE<sub>elec</sub> per receptor residue (top eight by |E|).
+  Both are optional, both are read CRLF-safely and cached by path + mtime, and every
+  result that quotes a ΔG carries the note that single-trajectory MM/GBSA without an
+  entropy term is a <em>rank-order estimate, not a binding free energy</em>.</p>
+
+  <h3>Reference</h3>
+  <p>Salentin, S. <i>et al.</i> (2015) PLIP, <i>Nucleic Acids Res.</i> 43, W443 — interaction
+  criteria. Gallivan &amp; Dougherty (1999) <i>PNAS</i> 96, 9459 — cation–π.
+  Genheden &amp; Ryde (2015) <i>Expert Opin. Drug Discov.</i> 10, 449 — what MM/GBSA
+  can and cannot be asked.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>groupA</code>, <code>groupB</code></td><td>selector or null</td><td>null</td>
+        <td><code>{"kind":"label","name":"chain","values":["A"]}</code>,
+            <code>{"kind":"elements","values":["Al"]}</code>,
+            <code>{"kind":"slab","axis":"z","min":0,"max":12}</code>, or
+            <code>{"kind":"all"}</code>. Null = automatic pair.</td></tr>
+    <tr><td><code>contactCutoff</code></td><td>Å</td><td>4.5</td><td>Heavy-atom contact distance.</td></tr>
+    <tr><td><code>hbondDistance</code></td><td>Å</td><td>3.5</td><td>Donor–acceptor distance.</td></tr>
+    <tr><td><code>hbondAngle</code></td><td>degrees</td><td>120</td><td>Minimum D–H···A angle.</td></tr>
+    <tr><td><code>perResidue</code></td><td>bool</td><td>true</td><td>Top-5 A residues by contacts (needs labels).</td></tr>
+  </table>
+  <p class="note">The SMD protocol (<code>smd_pull.py</code>) writes extended XYZ
+  with <code>chain resname resid</code> columns since 2026-09-08, so pull-off
+  trajectories carry their groups.</p>
+
+  <h3>Reference</h3>
+  <p>Baker, E. N. &amp; Hubbard, R. E. (1984) <i>Prog. Biophys. Mol. Biol.</i> 44, 97 — hydrogen-bond criteria.
+  Contact cutoff 4.5 Å: standard heavy-atom contact definition in protein–ligand analysis.</p>
+
+  <h3>Validation</h3>
+  <p>Unit fixtures: a hand-built two-chain frame with exactly 6 contacts, one geometric
+  H-bond (171°) and one rejected pair (90°), analytic COM distance; a 200-atom random
+  frame whose contact count equals a brute-force O(N²) count; rupture-frame logic on
+  synthetic series. Protocol gate: on the helix pull-off run the rupture frame must
+  match <code>force_curve.csv</code> (contacts → 0) within one frame.</p>
+
+  <h2 id="deformation">deformation — Deformation</h2>
+  <p><span class="badge">field</span><span class="badge">profile</span><span
+  class="badge">scalar</span><span class="badge">timeSeries</span> Mechanics &amp;
+  deformation · needs a reference frame · no strided preview</p>
+
+  <h3>Method</h3>
+  <p>Per-atom deformation against a <b>reference frame</b> (frame 0 by default; the
+  inspector has a picker and <em>Use current</em>). For each atom the neighbours
+  within the cutoff are taken in the reference frame; from the reference separations
+  d⁰ and current separations d the local deformation gradient F is the least-squares
+  affine map (Falk &amp; Langer 1998, in the formulation of Shimizu, Ogata &amp; Li
+  2007 used by OVITO's Atomic Strain). From F: the Green–Lagrangian strain
+  E = ½(FᵀF − I); <b>volumetric strain</b> tr(E)/3 and volume change det F − 1;
+  <b>von Mises shear strain</b>; and <b>D²min</b>, the mean squared non-affine
+  residual — the marker of plastic rearrangement and shear-transformation zones.
+  Displacement magnitude and MSD use the minimum image under the current box, so a
+  wrapped periodic trajectory does not fake large jumps. Atoms with fewer than three
+  non-coplanar reference neighbours get no fit and are counted. When the dump carries
+  six per-atom stress columns (<code>c_stress[1..6]</code> or
+  <code>sxx…syz</code>) the von Mises stress is reported too. Box strain is given
+  when both frames have a box. The field shown is chosen by <code>quantity</code>;
+  <code>rearranged</code> is the categorical D²min &gt; threshold map.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>cutoff</code></td><td>Å</td><td>3.5</td><td>Neighbour cutoff in the reference frame.</td></tr>
+    <tr><td><code>quantity</code></td><td>string</td><td>shear</td>
+        <td><code>shear</code> · <code>volumetric</code> · <code>d2min</code> · <code>displacement</code> ·
+            <code>rearranged</code> · <code>vonmises_stress</code>.</td></tr>
+    <tr><td><code>d2minThreshold</code></td><td>Å²</td><td>0.5</td><td>Above = rearranged.</td></tr>
+    <tr><td><code>stressColumns</code></td><td>bool</td><td>true</td><td>Read per-atom stress columns when present.</td></tr>
+    <tr><td><code>profileAxis</code>, <code>bins</code></td><td>x|y|z, integer</td><td>z, 24</td><td>Profile of the field along an axis.</td></tr>
+  </table>
+  <p class="note">MCP: <code>reference_frame</code>; CLI: <code>--reference N</code>.</p>
+
+  <h3>Reference</h3>
+  <p>Falk, M. L. &amp; Langer, J. S. (1998) <i>Phys. Rev. E</i> 57, 7192 — D²min and the affine fit.
+  Shimizu, F., Ogata, S. &amp; Li, J. (2007) <i>Mater. Trans.</i> 48, 2923 — atomic strain from F.</p>
+
+  <h3>Validation</h3>
+  <p>Analytic fixtures on a 500-atom fcc block: uniform F = diag(1.02, 1, 0.99) and a
+  3 % simple shear reproduce the analytic strains with D²min ≈ 0; a rigid translation
+  (wrapped through the periodic box) and a 10° rotation give zero strain and zero
+  D²min; a single displaced atom lights up only its neighbourhood; hand-made uniaxial
+  stress columns give the expected von Mises stress. Implementation note: the fitted
+  matrix V⁻¹W is the transpose of F for row-vector conventions; the tool uses the true
+  gradient so that d ≈ F d⁰ holds and rotations are strain-free.</p>
+
+<!-- Fragment for docs/manual/html/tools.html — splice before <h2>Result shape</h2>. -->
+<section>
+  <h2 id="crystallinity">crystallinity — Crystallinity</h2>
+  <p><span class="badge">perAtomField</span><span class="badge">profile</span><span
+  class="badge">scalar</span><span class="badge">timeSeries</span> Structure
+  &amp; order · no requirements · strided preview supported</p>
+
+  <h3>Method</h3>
+  <p>Two readings of the same neighbourhood, both computed on every call.</p>
+
+  <p><b>Adaptive common neighbour analysis (a-CNA)</b> gives each atom a discrete
+  structure label — <span class="tag">FCC</span>, <span class="tag">HCP</span>,
+  <span class="tag">BCC</span>, <span class="tag">icosahedral</span> or
+  <span class="tag">other</span> — with no cutoff to tune. For each atom the 14
+  nearest neighbours are taken (search radius = 1.5 × the mean twelfth-neighbour
+  distance, sampled from ~200 atoms, which is the smallest factor that always
+  contains the fourteenth neighbour of an fcc lattice). The close-packed test
+  uses the first twelve with the bond cutoff</p>
+<pre>r_c(fcc,hcp,ico) = (1 + √2)/2 · ⟨r₁ … r₁₂⟩</pre>
+  <p>and, if that fails, the bcc test uses all fourteen — eight first neighbours
+  at √3·a/2 and six second neighbours at a — with</p>
+<pre>r_c(bcc) = (1 + √2)/2 · ½ · ( 2·⟨r₁ … r₈⟩/√3  +  ⟨r₉ … r₁₄⟩ )</pre>
+  <p>Both cutoffs estimate the conventional lattice parameter from the neighbour
+  distances and then apply the classic factor (1+√2)/2, which puts the cutoff
+  midway between the first and second shells of the lattice being tested; the bcc
+  form simply averages the two independent estimates of <i>a</i> that the eight
+  first and six second neighbours provide. A signature
+  (common neighbours, bonds among them, largest connected bond group) is computed
+  for every bond, and the multiset of signatures is matched exactly:
+  fcc = 12 × 421, hcp = 6 × 421 + 6 × 422, bcc = 8 × 666 + 6 × 444,
+  icosahedral = 12 × 555, anything else = other. The third index follows OVITO's
+  definition — the number of bonds in the largest connected cluster of those
+  bonds, not a longest simple path.</p>
+
+  <p><b>Averaged Steinhardt order</b> gives the continuous companion, so
+  “amorphous” is a number and not just the leftover bucket:
+  q<sub>lm</sub>(i) is the mean of the spherical harmonics over the twelve nearest
+  bonds, q̄<sub>lm</sub>(i) then averages q<sub>lm</sub> over <i>i</i> and its own
+  neighbours, and q̄<sub>l</sub> = √(4π/(2l+1) · Σ<sub>m</sub>|q̄<sub>lm</sub>|²)
+  for l = 4 and 6. The harmonics are computed from the associated Legendre
+  recurrences directly — no external dependency and no lookup table. Perfect fcc
+  gives q̄₆ ≈ 0.575 and q̄₄ ≈ 0.191; a liquid sits near 0.3.</p>
+
+  <p>The summary reports the structure fractions, the crystalline fraction, the
+  <b>amorphicity index</b> (= the “other” fraction, i.e. 1 − crystalline) and the
+  mean q̄₆ / q̄₄. <code>method</code> decides only which quantity colours the atoms
+  and which definition of “crystalline” drives the fraction, the profile and the
+  scalar: <code>acna</code> = not “other”, <code>q6</code> = q̄₆ above
+  <code>q6Threshold</code>. The profile bins that 0/1 crystallinity along
+  <code>profileAxis</code> — the “where is the oxide, where is the metal” reading
+  — and the scalar is the crystalline fraction, which is what a time series plots
+  across an anneal or an oxidation run.</p>
+
+  <p>No box is required: CNA is local. Without a cell the outer surface of an open
+  block classifies as “other” (an incomplete neighbourhood is genuinely not fcc)
+  and the result carries a note saying so. With a cell, distances use the minimum
+  image, so a fully periodic crystal is 100 % classified with no surface.
+  Giving <code>cutoff</code> a value switches to conventional CNA with that fixed
+  bond cutoff: the neighbour set becomes everything inside the cutoff, and only
+  12- or 14-coordinated atoms can match a signature.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>method</code></td><td><code>"acna"</code>/<code>"q6"</code></td>
+        <td><code>"acna"</code></td>
+        <td>What the overlay shows and how “crystalline” is defined.
+            <code>acna</code> = the categorical structure field;
+            <code>q6</code> = continuous q̄₆ with a threshold.</td></tr>
+    <tr><td><code>q6Threshold</code></td><td>number</td><td>0.5</td>
+        <td>Averaged q̄₆ above this counts as ordered (used only when
+            <code>method</code> is <code>q6</code>). 0.5 separates fcc/hcp
+            (≈ 0.49–0.58) from a liquid (≈ 0.3).</td></tr>
+    <tr><td><code>cutoff</code></td><td>number or null</td><td>null</td>
+        <td>Null = adaptive, per atom (a-CNA). A value = conventional CNA with
+            that fixed bond cutoff in Å; put it between the first and second
+            neighbour shells (fcc Al: 3.45 Å).</td></tr>
+    <tr><td><code>profileAxis</code></td><td><code>"x"</code>/<code>"y"</code>/<code>"z"</code></td>
+        <td><code>"z"</code></td><td>Axis the crystalline-fraction profile bins along.</td></tr>
+    <tr><td><code>bins</code></td><td>integer</td><td>24</td>
+        <td>Requested bin count (same 0.5 Å floor on bin width as every profile).</td></tr>
+  </table>
+  <p class="note">Colours follow OVITO's convention so figures read the same as
+  everyone else's: fcc green, hcp red, bcc blue, icosahedral yellow, other grey.
+  Under a strided preview only every <i>n</i>-th atom is classified; the rest are
+  shown as “other” and the result says so in a note.</p>
+
+  <h3>Reference</h3>
+  <ul>
+    <li>A. Stukowski, <i>Structure identification methods for atomistic
+    simulations of crystalline materials</i>, Modelling Simul. Mater. Sci. Eng.
+    <b>20</b> (2012) 045021 — adaptive CNA.</li>
+    <li>P. J. Steinhardt, D. R. Nelson &amp; M. Ronchetti, <i>Bond-orientational
+    order in liquids and glasses</i>, Phys. Rev. B <b>28</b> (1983) 784 —
+    q<sub>4</sub>/q<sub>6</sub>.</li>
+    <li>W. Lechner &amp; C. Dellago, <i>Accurate determination of crystal
+    structures based on averaged local bond order parameters</i>, J. Chem. Phys.
+    <b>129</b> (2008) 114707 — the averaged q̄ form used here.</li>
+  </ul>
+  <p>Implementation:
+  <code>Sources/LAMMPSCore/Analysis/CrystallinityTool.swift</code> (a-CNA,
+  signatures, classification) and
+  <code>Sources/LAMMPSCore/Analysis/BondOrder.swift</code> (spherical harmonics
+  and q̄<sub>l</sub>).</p>
+
+  <h3>Validation</h3>
+  <p><code>CrystallinityToolTests</code> runs against synthetic lattices built in
+  <code>Tests/AppTests/Fixtures.swift</code>: perfect fcc (Al, a = 4.05 Å),
+  bcc (Fe, a = 2.87 Å) and hcp (Mg, a = 3.21 Å, c/a = 1.633), each fully periodic,
+  must come out 100 % fcc / bcc / hcp; perfect fcc must also give mean
+  q̄₆ = 0.575 ± 0.01 and q̄₄ = 0.191 ± 0.01, the textbook values. An fcc lattice
+  shaken by a Gaussian of σ = 0.6 Å (well past the Lindemann criterion) stands in
+  for a liquid and must fall below 10 % crystalline with mean q̄₆ &lt; 0.35. The
+  same fcc block with the cell removed must classify its interior fcc and its
+  corners “other”, and the fixed-cutoff path (3.45 Å) must reproduce the adaptive
+  fcc answer exactly. Profile, strided preview and cancellation are covered as
+  well.</p>
+  <p class="note">Cross-check against OVITO on real Al/O oxidation frames — the
+  three-frame, 2 % gate in the phase plan — is still pending: OVITO 3.9.4 is
+  installed as <code>/Applications/Ovito.app</code>, but its Python module is not
+  importable from this machine's <code>python3</code>, so the comparison has to be
+  driven from OVITO Pro's own interpreter or a separate <code>ovito</code> pip
+  install.</p>
+</section>
+
+  <h2 id="pulloff_energetics">pulloff_energetics — Pull-off energetics</h2>
+  <p><span class="badge">scalar</span><span class="badge">timeSeries</span>
+  Adhesion &amp; binding · needs a side file (<code>force_curve.csv</code>) · no strided preview</p>
+
+  <h3>Method</h3>
+  <p>This tool reads the pull-off protocol's force curve, not the atoms: the
+  <code>force_curve.csv</code> written by <code>smd_pull.py</code> (time, reference
+  displacement, ligand-COM displacement, spring force, running work, contacts), found
+  next to the trajectory, in a <code>results*/</code> sibling, or one level up when the
+  trajectory sits inside <code>results*/</code>; <code>config.json</code> supplies the
+  pull velocity and spring constant. Row <i>i</i> is aligned with frame <i>i</i> (the
+  protocol writes both at the same cadence); <code>frameAlignment: "time"</code>
+  aligns by <code>time_ps</code> instead. Per frame it reports the row's values plus the
+  run-level numbers: <b>rupture force F*</b> (peak spring force, with its frame),
+  <b>work of separation W</b> (the protocol's running ∫F·dx<sub>ref</sub>, with a
+  trapezoid ∫F·dx<sub>COM</sub> check), and the <b>rupture frame</b> (contacts → 0 and
+  stay 0). With several seeds, F* and W are given as median [IQR] — distributions,
+  never a bare mean. A <b>Bell–Evans</b> fit of F* against ln(loading rate) (k<sub>off</sub>⁰,
+  x<sub>β</sub>) appears only when <code>runDirs</code> supplies ≥ 3 distinct velocities;
+  a <b>Jarzynski</b> / second-order-cumulant free energy only when ≥ 10 seeds were pulled
+  at ≤ 1 Å/ns — otherwise the row says "work, single pull — not a free energy". The
+  scalar is the spring force at the frame, and the result carries the whole force curve
+  as a frame-indexed series, so the F(t) chart appears the moment the tool is added and its
+  marker follows playback; click a point to jump to that frame. Every result carries the note that SMD loading rates
+  are 10⁶–10⁹× AFM: F* is never an experimental number.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>csvPath</code></td><td>string or null</td><td>null</td><td>Explicit force curve; null = locate near the trajectory.</td></tr>
+    <tr><td><code>seed</code></td><td>integer or null</td><td>null</td><td>Which seed's rows align with the frames (null = best frame-count match).</td></tr>
+    <tr><td><code>frameAlignment</code></td><td>row | time</td><td>row</td><td>Row i ↔ frame i, or by <code>time_ps</code> with <code>frameInterval_ps</code>.</td></tr>
+    <tr><td><code>runDirs</code></td><td>[string]</td><td>[]</td><td>Extra run directories (config.json + force_curve.csv) pooled for Bell–Evans / Jarzynski.</td></tr>
+    <tr><td><code>temperature_K</code></td><td>K</td><td>300</td><td>kT for the Bell–Evans and Jarzynski expressions (k<sub>B</sub>T, not a rounded constant).</td></tr>
+  </table>
+
+  <h3>Reference</h3>
+  <p>Bell, G. I. (1978) <i>Science</i> 200, 618; Evans, E. &amp; Ritchie, K. (1997) <i>Biophys. J.</i> 72, 1541 —
+  loading-rate dependence. Jarzynski, C. (1997) <i>Phys. Rev. Lett.</i> 78, 2690; Park, S. &amp; Schulten, K. (2004)
+  <i>J. Chem. Phys.</i> 120, 5946 — work → free energy and the stiff-spring cumulant; Hummer &amp; Szabo (2001) for the
+  time-dependent bias.</p>
+
+  <h3>Validation</h3>
+  <p>Synthetic CSVs: F*, W (CSV ≡ trapezoid on a linear ramp), rupture index, tolerant parsing (CRLF included —
+  Python's csv module writes CRLF), Bell–Evans recovers k<sub>off</sub>⁰ and x<sub>β</sub> from generated points and is
+  nil at two rates, Jarzynski is nil at nine works. Protocol gate 2026-09-08: on the helix pull-off run the tool reports
+  F* = 288.6 pN at frame 36 (180 ps), W = 59.17 kJ/mol and rupture frame 37 (185 ps) — the values in that run's
+  <code>outcomes.json</code>.</p>
+
+<!-- Fragment for docs/manual/html/tools.html — splice before <h2>Result shape</h2>. -->
+<section>
+  <h2 id="ptm">ptm — PTM (orientation &amp; grains)</h2>
+  <p><span class="badge">perAtomField</span><span class="badge">profile</span><span
+  class="badge">scalar</span><span class="badge">timeSeries</span> Structure
+  &amp; order · no requirements · strided preview supported</p>
+
+  <h3>Method</h3>
+  <p><b>Polyhedral template matching</b> answers the same question as a-CNA —
+  what structure is this atom in — but by least squares rather than by bond
+  topology, and it returns two things a-CNA cannot: the <b>orientation</b> of
+  the local lattice and its elastic distortion. Orientation is what turns
+  “these atoms are fcc” into “these atoms are two grains meeting at 15°”.</p>
+
+  <p>For each atom the <i>N</i> nearest neighbours are taken — 12 for
+  fcc/hcp/icosahedral, 14 for bcc (8 ⟨111⟩ + 6 ⟨100⟩), 6 for simple cubic — and
+  scaled by their mean length. Each candidate template is the ideal neighbour
+  shell of that structure, also at unit mean length. Following the paper the
+  point set is the <i>N</i> neighbours <i>and</i> the central atom, both sides
+  shifted to their own centroid, and the tool minimises</p>
+<pre>RMSD = √( 1/(N+1) · [ Σᵢ |bᵢ − b̄ − R·a_π(i)|²  +  |b̄|² ] )</pre>
+  <p>over the correspondence π (which neighbour sits on which template vertex)
+  and the rotation R. Centring is not cosmetic: the displacement of the central
+  atom is common to all <i>N</i> measured vectors, so leaving it in would put it
+  into every residual and inflate the RMSD by √2 on a hot frame.</p>
+
+  <p>The correspondence is found geometrically. A seed maps the atom's nearest
+  neighbour to a template vertex and its first non-collinear neighbour to
+  another, keeping only pairs whose template angle is within 15° of the measured
+  one. The rotation follows from <b>Horn's quaternion method</b> — the dominant
+  eigenvector of a symmetric 4×4, found by cyclic Jacobi, so there is no SVD in
+  the codebase at all. Every remaining neighbour then takes its nearest template
+  vertex (a collision falls back to a globally greedy matching), and the best two
+  seeds get two assign → Kabsch rounds each. The smallest RMSD over all
+  templates wins; below <code>rmsdThreshold</code> the atom takes that
+  template's structure, above it the atom is <span class="tag">other</span>.</p>
+
+  <p class="note">This is PTM's RMSD and orientation, <b>without</b> the paper's
+  Weinberg canonical-form acceleration, which turns the correspondence search
+  into a graph-hash lookup. The trade is deliberate: a short port you can check
+  by eye instead of a fast one you cannot. The one economy taken is exact —
+  applying a symmetry of the template to a correspondence gives another
+  correspondence with the same RMSD, so the search only needs to seed on one
+  vertex per orbit of the template's proper rotation group (one for fcc, ico and
+  simple cubic; two for bcc and hcp) instead of on all 12 or 14.</p>
+
+  <p><b>Grain boundaries.</b> The disorientation between two atoms is the angle
+  of q₁⁻¹q₂ minimised over the lattice's proper rotation group — 24 operations
+  for fcc/bcc/simple cubic, 12 (D₆) for hcp, none for icosahedral. One-sided
+  reduction is exact here, not an approximation: rotation angle is invariant
+  under conjugation, so the two-sided class {g₁Mg₂} produces exactly the angles
+  {angle(gM)}. An atom with any same-type neighbour disorientation above
+  <code>gbAngle</code> is flagged a grain-boundary atom; atoms joined by a
+  disorientation below it are unioned, and the number of connected clusters of
+  4 atoms or more is reported as the grain count. The comparison runs over every
+  neighbour inside the structure-search radius, not only the template's own
+  vertices: at a sharp boundary the atoms <i>on</i> the interface match no
+  template at all, so the last matched atom of one grain and the first of the
+  other are two shells apart and a 12-nearest test would look straight past the
+  boundary it is meant to find.</p>
+
+  <p><b>Strain.</b> The matched correspondence also gives the affine fit
+  F = (Σ bᵢaᵀ)(Σ aaᵀ)⁻¹ with b ≈ F a. Since both sides carry unit mean neighbour
+  length the volumetric part is divided out, so the reported von Mises invariant
+  of ½(FᵀF − I) is the deviatoric (shear) distortion only.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>quantity</code></td>
+        <td><code>"structure"</code>/<code>"orientation"</code>/<code>"rmsd"</code>/<code>"gb"</code>/<code>"shear"</code></td>
+        <td><code>"structure"</code></td>
+        <td>What colours the atoms. <code>structure</code> = the categorical PTM
+            class (fcc/hcp/bcc/icosahedral/simple cubic/other, OVITO's colours);
+            <code>orientation</code> = inverse-pole-figure hue;
+            <code>rmsd</code> = the fit residual, 0…<code>rmsdThreshold</code>;
+            <code>gb</code> = interior grey / grain boundary orange;
+            <code>shear</code> = von Mises shear of the affine fit.</td></tr>
+    <tr><td><code>rmsdThreshold</code></td><td>number</td><td>0.1</td>
+        <td>Dimensionless (both point sets at unit mean neighbour length). Above
+            it the atom is “other”. 0.1 is the paper's and OVITO's default.</td></tr>
+    <tr><td><code>gbAngle</code></td><td>number (degrees)</td><td>5.0</td>
+        <td>Symmetry-reduced disorientation between neighbouring same-type atoms
+            that counts as a grain boundary, and the cut the grain union-find
+            uses.</td></tr>
+    <tr><td><code>templates</code></td><td>array of strings</td>
+        <td><code>["fcc","hcp","bcc","ico"]</code></td>
+        <td>Candidates to search. <code>"sc"</code> (simple cubic) is available
+            and off by default. Fewer templates cost proportionally less.</td></tr>
+    <tr><td><code>profileAxis</code></td><td><code>"x"</code>/<code>"y"</code>/<code>"z"</code></td>
+        <td><code>"z"</code></td><td>Axis the crystalline-fraction profile bins along.</td></tr>
+    <tr><td><code>bins</code></td><td>integer</td><td>24</td>
+        <td>Requested bin count (same 0.5 Å floor on bin width as every profile).</td></tr>
+  </table>
+  <p class="note"><b>Orientation colouring</b> is published as a single hue in
+  0…1, not as a colour triple, because a per-atom field is one number. For cubic
+  structures it is the inverse-pole-figure hue of the crystal direction parallel
+  to the lab <i>z</i> axis, folded into the standard triangle and weighted
+  barycentrically — 0 = red = ⟨001⟩, ⅓ = green = ⟨101⟩, ⅔ = blue = ⟨111⟩. hcp has
+  no such triangle, so it uses the simpler scheme of the c-axis tilt away from
+  <i>z</i> (0 = c ∥ z, 1 = c ⟂ z), and the result says so in a note. Unmatched
+  and icosahedral atoms read 0.</p>
+  <p class="note"><b>Cost.</b> Measured on a 6³ Al block (864 atoms), release
+  build, Apple silicon: <b>25 µs/atom</b> on a perfect lattice — an exact fit
+  cannot be beaten, so the search stops after the first template — and about
+  <b>55 µs per atom per template</b> once every candidate really has to be
+  searched, i.e. ~220 µs/atom for the default four on a thermalised frame. That
+  is roughly two orders of magnitude above a-CNA and is the price of the missing
+  canonical-form lookup; <code>estimatedCost</code> reports it so the governor
+  defers the tool during playback rather than dropping frames.</p>
+
+  <h3>Reference</h3>
+  <ul>
+    <li>P. M. Larsen, S. Schmidt &amp; J. Schiøtz, <i>Robust structural
+    identification via polyhedral template matching</i>, Modelling Simul. Mater.
+    Sci. Eng. <b>24</b> (2016) 055007 — the method, the templates and the RMSD
+    threshold.</li>
+    <li>B. K. P. Horn, <i>Closed-form solution of absolute orientation using unit
+    quaternions</i>, J. Opt. Soc. Am. A <b>4</b> (1987) 629 — the rotation as the
+    dominant eigenvector of a symmetric 4×4.</li>
+  </ul>
+  <p>Implementation:
+  <code>Sources/LAMMPSCore/Analysis/PTMTool.swift</code> (classification, grains,
+  colouring), <code>TemplateMatching.swift</code> (templates and the
+  correspondence search) and <code>Quaternion.swift</code> (Horn's method, the
+  symmetry groups, disorientation).</p>
+
+  <h3>Validation</h3>
+  <p><code>PTMToolTests</code> checks the algebra first: Horn's method recovers
+  known rotations (including from only two vector pairs) to 1e-9 rad, the
+  quaternion and its matrix rotate identically, and disorientation reduces 90°
+  about ⟨001⟩ and 120° about ⟨111⟩ to zero under cubic symmetry while leaving 3°
+  at 3°.</p>
+  <p>On the synthetic lattices of <code>Tests/AppTests/Fixtures.swift</code>,
+  perfect fcc (Al), bcc (Fe) and hcp (Mg) each come out 100 % of the right type
+  with mean RMSD below 1e-6, one grain and no grain-boundary atoms. An fcc block
+  turned 20° about ⟨110⟩ returns that orientation to within 0.5° modulo cubic
+  symmetry, and an unturned one returns the identity. A bicrystal — two fcc
+  half-blocks meeting at x = L/2 with the right one turned 15° about z, open in
+  x and y so no wrap seam can pose as a boundary — gives exactly two grains, with
+  every flagged atom inside one lattice spacing of the interface and a mean
+  disorientation that reads as high-angle (~13°, pulled below 15° because the
+  last matched atoms on each side sit in the boundary's strain field).</p>
+  <p>The phase-plan gate is the hot frame: an fcc block shaken by an independent
+  Gaussian of σ = 0.15 Å (~5 % of the 2.86 Å nearest-neighbour distance) must
+  come out ≥ 95 % fcc under PTM and must beat a-CNA on the same frame — it does,
+  95.3 % against 90.6 %. Note that independent per-atom noise is a harsher test
+  of relative geometry than a real hot crystal, whose displacements are dominated
+  by long-wavelength phonons that move neighbours together; the σ that breaks
+  this fixture is well below the σ that would break a thermalised frame. Past
+  σ ≈ 0.2 Å the hard RMSD cut makes PTM fall off faster than a-CNA's topological
+  test, which is worth remembering before raising the temperature: raise
+  <code>rmsdThreshold</code> with it. A σ = 0.6 Å frame (a liquid) comes out
+  under 10 % crystalline. Profile, strided preview, the unknown-quantity
+  fallback and cancellation are covered too.</p>
+</section>
+
+  <h2 id="fep_results">fep_results — FEP results (ΔΔG)</h2>
+  <p><span class="badge">scalar</span><span class="badge">timeSeries</span>
+  Adhesion &amp; binding · needs a side file (<code>results.json</code>) · no strided preview</p>
+
+  <h3>Method</h3>
+  <p>Reads the <code>results.json</code> written by the delivery suite's relative binding free
+  energy pipeline (<code>delivery/fep/rbfe_openfe.py analyze</code>, schema
+  <code>mdengine.fep.results/1</code>): per-edge ΔΔG with MBAR uncertainty, solvent and complex leg
+  ΔG, minimum overlap-matrix entry, convergence flag; per-ligand absolute ΔG from the network MLE
+  (cinnabar when available) with rank; cycle-closure errors; force field and provenance. The
+  summary is the ranked ligand table — the "which compound next" answer — followed by the edges and
+  cycles, with a note for every edge that fails a gate (not converged, overlap &lt; 0.03, or
+  |cycle closure| &gt; 1 kcal/mol). The scalar is the ΔΔG of edge <i>i</i>, so the chart's "frame"
+  axis is the edge index here.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>jsonPath</code></td><td>string or null</td><td>null</td><td>Explicit results.json; null = beside the trajectory or in a <code>results*/</code> sibling.</td></tr>
+    <tr><td><code>sortBy</code></td><td>rank | ddG | error</td><td>rank</td><td>Order of the ligand table.</td></tr>
+  </table>
+
+  <h3>Reference</h3>
+  <p>Wang et al. (2015) <i>JACS</i> 137, 2695 — the FEP+ benchmark and the ~1 kcal/mol expectation;
+  Mey et al. (2020) <i>Living J. Comp. Mol. Sci.</i> 2, 18378 — best practices for alchemical free
+  energy calculations; Open Free Energy toolkit (openfe) and cinnabar for network MLE.</p>
+
+  <h3>Validation</h3>
+  <p>Unit tests decode the schema, order the table, raise the gate flags and locate the file.
+  End-to-end validation on a real OpenFE run is pending: the toolkit is conda-forge only (the PyPI
+  name <code>openfe</code> is an unrelated package), so the runner image needs a micromamba layer
+  (<code>delivery/fep/runner-image.md</code>); the first paid run is a delivery phase-two decision.</p>
+
+<!-- Fragment for docs/manual/html/tools.html — splice before <h2>Result shape</h2>. -->
+
+  <h2 id="conformation">conformation — Conformation (RMSD · Rg · DSSP · clusters)</h2>
+  <p><span class="badge">perAtomField</span><span class="badge">scalar</span><span
+  class="badge">timeSeries</span> Structure &amp; order · no requirements ·
+  no strided preview (a global fit on a subset of atoms would move the answer)</p>
+
+  <h3>Method</h3>
+  <p>The biomolecular counterpart of <code>deformation</code>: instead of a local
+  affine fit it asks global questions about a <b>whole trajectory</b>. Every
+  comparison first removes the tumbling by <b>optimal superposition</b> on the
+  chosen atoms (Kabsch's rotation, computed in Horn's quaternion form — the
+  largest eigenvector of a 4 × 4 built from the correlation matrix, which cannot
+  fall into the reflection that a naive SVD implementation returns).</p>
+
+  <p>Per frame: <b>RMSD</b> to the reference frame after that fit (the RMSD
+  <i>without</i> the fit is reported alongside, so rigid drift is visible), and
+  the mass-weighted <b>radius of gyration</b> of the group. Over the trajectory,
+  computed once and cached per trajectory generation and parameter set:
+  <b>RMSF</b> per atom after superposing every frame on the reference, the
+  <b>mean structure</b>, a <b>clustering</b> of frames by pairwise RMSD (each
+  pair superposed on its own, not read off a common fit), and a <b>PCA</b> of
+  the superposed coordinates — the leading eigenvectors of the coordinate
+  covariance by power iteration with deflation, so the 3N × 3N covariance is
+  never formed. The summary gives the variance each component explains and the
+  projection of the current frame on PC1/PC2.</p>
+
+  <p>Clustering is either <b>k-medoids</b> (deterministic: farthest-point
+  seeding, then assign / re-medoid until nothing moves — no RNG, so the same
+  trajectory clusters the same way twice) or, when
+  <code>clusterRMSDCutoff</code> is set, <b>gromos-style cutoff clustering</b>
+  (Daura 1999): take the frame with the most neighbours within the cutoff as a
+  centre, remove it and its neighbours, repeat — the cluster count comes out of
+  the data. Clusters are renumbered so cluster 1 is the most populated. Above
+  <b>400 frames</b> the distance matrix is built from every k-th frame and the
+  remaining frames are assigned to the nearest medoid; the result says so in its
+  notes.</p>
+
+  <p><b>Secondary structure</b> (the <code>dssp</code> field) is DSSP as Kabsch
+  &amp; Sander defined it: residues are grouped by chain and residue id from the
+  extended-XYZ <code>name</code>/<code>chain</code>/<code>resid</code> columns,
+  the amide hydrogen is reconstructed at
+  H = N + (C<sub>prev</sub> − O<sub>prev</sub>)/|C<sub>prev</sub> − O<sub>prev</sub>| × 1 Å,
+  and a hydrogen bond is an electrostatic energy
+  E = 0.084 · 332 · (1/r<sub>ON</sub> + 1/r<sub>CH</sub> − 1/r<sub>OH</sub> − 1/r<sub>CN</sub>)
+  below −0.5 kcal/mol. From the bond map: <i>n</i>-turns (n = 3, 4, 5), minimal
+  helices from two consecutive turns (<b>H</b> for 4, <b>G</b> for 3, <b>I</b>
+  for 5), parallel and antiparallel <b>bridges</b> collected into ladders
+  (<b>E</b>; an isolated bridge is <b>B</b>), <b>T</b> for the remaining turn
+  residues, <b>S</b> for a bend (κ &gt; 70°), else coil. Turns, helices and
+  bends are confined to an unbroken backbone segment, so two chains laid side by
+  side never fake a turn across the gap. A frame with no <code>name</code>
+  column cannot be assigned — the tool says
+  “DSSP needs atom names (extended XYZ name column)” rather than guessing that a
+  C is a Cα.</p>
+
+  <p>The selection is by atom name: <code>ca</code>, <code>backbone</code>
+  (N, CA, C, O), <code>heavy</code> (everything but hydrogen) or <code>all</code>;
+  on a frame with no <code>name</code> column, <code>ca</code> and
+  <code>backbone</code> fall back to heavy atoms and note it. The scalar is the
+  RMSD, so sweeping frames plots the familiar RMSD-vs-time curve.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>selection</code></td><td>string</td><td>ca</td>
+        <td><code>ca</code> · <code>backbone</code> · <code>heavy</code> · <code>all</code> — the atoms fitted and measured.</td></tr>
+    <tr><td><code>quantity</code></td><td>string</td><td>rmsf</td>
+        <td>Field shown: <code>rmsf</code> · <code>dssp</code> · <code>displacement</code> (from the reference, after the fit).</td></tr>
+    <tr><td><code>clusterCount</code></td><td>integer</td><td>4</td><td>k for k-medoids.</td></tr>
+    <tr><td><code>clusterRMSDCutoff</code></td><td>Å or null</td><td>null</td>
+        <td>Set = gromos cutoff clustering instead of k-medoids.</td></tr>
+    <tr><td><code>pcaComponents</code></td><td>integer</td><td>2</td><td>Components reported (PC1, PC2…).</td></tr>
+    <tr><td><code>group</code></td><td>group selector</td><td>null</td>
+        <td>Restrict the study to a subset — e.g. <code>{"kind":"label","name":"chain","values":["A"]}</code>.</td></tr>
+  </table>
+  <p class="note">The reference is the frame the inspector's reference picker
+  holds (MCP <code>reference_frame</code>, CLI <code>--reference N</code>), and
+  frame 0 of the trajectory when none is set.</p>
+
+  <h3>Reference</h3>
+  <p>Kabsch, W. (1976) <i>Acta Cryst.</i> A32, 922 — the optimal rotation.
+  Horn, B. K. P. (1987) <i>J. Opt. Soc. Am. A</i> 4, 629 — its quaternion form.
+  Kabsch, W. &amp; Sander, C. (1983) <i>Biopolymers</i> 22, 2577 — DSSP.
+  Daura, X. <i>et al.</i> (1999) <i>Angew. Chem. Int. Ed.</i> 38, 236 — gromos
+  cutoff clustering.</p>
+
+  <h3>Validation</h3>
+  <p>Analytic fixtures. A rigidly rotated and translated copy of a 20-atom cloud
+  fits back to RMSD 0 (10⁻⁹ Å) while the unfitted RMSD is several Å, and a
+  weighted fit ignores an atom outside the weight set. A five-frame trajectory in
+  which one atom wiggles by ±0.5 Å gives that atom RMSF 0.316 Å = √(2·0.25/5) and
+  every other atom below 0.05 Å. Eight equal masses at the corners of a cube of
+  half-edge d give Rg = d√3 exactly. Nine frames in three well-separated basins
+  cluster 4/3/2 under both k-medoids and the gromos cutoff, and a 450-frame
+  two-basin trajectory (over the 400-frame cap) still recovers 300/150 through
+  the subsample-and-assign path. Frames displaced along a single direction put
+  &gt; 98 % of the variance on PC1, and the solver returns exactly one component
+  with the closed-form variance for exactly rank-one data. Backbone fixtures are
+  built from internal coordinates (NeRF) and checked against their own torsions:
+  an ideal α-helix (φ = −57°, ψ = −47°, 12 residues) is <b>83 % H</b> overall and
+  <b>100 % H</b> over the interior residues — the two termini cannot be helix,
+  since a minimal helix needs two consecutive 4-turns; two ideal β-strands
+  (φ = −120°, ψ = +130°) related by the sheet's two-fold axis at 4.85 Å are
+  <b>62 % E</b>, which is 5 of the 6 assignable residues in each strand. That
+  sheet is an idealisation rather than a relaxed hairpin, so the test asserts
+  ≥ 50 % E rather than a specific pattern. A frame with no <code>name</code>
+  column returns no DSSP field and the note that says why.</p>
+
+  <h2 id="kinetics_tramd">kinetics_tramd — Unbinding kinetics (τRAMD)</h2>
+  <p><span class="badge">scalar</span><span class="badge">timeSeries</span>
+  Adhesion &amp; binding · needs a side file (<code>tramd_times.csv</code>) · no strided preview</p>
+
+  <h3>Method</h3>
+  <p>Reads the output of the τRAMD protocol (<code>delivery/module1/tramd.py</code>): random
+  acceleration MD (Lüdemann, Lange &amp; Wade 2000) — a constant-magnitude random force on the ligand
+  centre of mass whose direction is re-drawn whenever the ligand fails to move more than
+  <i>r</i><sub>min</sub> in an evaluation window — run as replicas × seeds until the ligand leaves
+  (COM distance above a threshold) or the time cap is hit (censored). Per seed, the residence time
+  τ is the time at which half the replicas have dissociated (interpolated); the overall τ is the
+  mean over seeds with a bootstrap 95 % confidence interval over replicas (Kokh et al. 2018). The
+  summary gives τ with its interval, per-seed τ, replica count and the censored fraction; the scalar
+  is the fraction still bound at the frame's time, so the chart is the survival curve.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>csvPath</code></td><td>string or null</td><td>null</td><td>Explicit tramd_times.csv; null = located beside the trajectory / in results*/.</td></tr>
+    <tr><td><code>frameTime_ps</code></td><td>ps or null</td><td>null</td><td>Frame index → time mapping when the file carries no time axis.</td></tr>
+    <tr><td><code>temperature_K</code></td><td>K</td><td>300</td><td>Recorded with the result.</td></tr>
+  </table>
+
+  <h3>Reference</h3>
+  <p>Kokh, D. B. et al. (2018) <i>J. Chem. Theory Comput.</i> 14, 3859 — τRAMD; Lüdemann, Lange &amp;
+  Wade (2000) <i>J. Mol. Biol.</i> 303, 797 — random acceleration MD. τRAMD ranks k<sub>off</sub>
+  within a series; it is not an absolute rate without calibration against measured values.</p>
+
+  <h3>Validation</h3>
+  <p>Synthetic replica sets: τ interpolation exact, bootstrap interval reproducible and containing τ,
+  censoring counted, CRLF files parse like LF, side-file location. Protocol: a CPU dry run (2 replicas ×
+  200 steps) on the helix complex writes all files and reports the per-replica wall estimate; the full
+  15-replica run at 2 ns cap (≈ 6 h CPU on this Mac, minutes on the hosted GPU) is a spend decision.</p>
+
+<!-- Fragment for docs/manual/html/tools.html — splice before <h2>Result shape</h2>. -->
+<section>
+  <h2 id="rdf">rdf — Radial distribution</h2>
+  <p><span class="badge">perAtomField</span><span class="badge">profile</span><span
+  class="badge">scalar</span><span class="badge">timeSeries</span> Structure
+  &amp; order · no requirements (a box is strongly recommended) · strided preview supported</p>
+
+  <h3>Method</h3>
+  <p>The pair correlation function g(r): how much more likely a B atom is at a
+  distance r from an A atom than it would be in a structureless fluid of the same
+  density. Pair separations up to <code>rMax</code> are collected from the shared
+  neighbour list and binned, then each bin is divided by the ideal-gas expectation
+  for that bin, N<sub>A</sub>·ρ<sub>B</sub>·(4/3)π(r<sub>hi</sub>³ − r<sub>lo</sub>³) —
+  the exact shell volume, not the thin-shell 4πr²dr, which is several per cent wrong
+  in the first bins, exactly where the first peak is. With a cell, distances use the
+  minimum image and ρ<sub>B</sub> is N<sub>B</sub>/V; without one, ρ comes from the
+  atoms' bounding box and the result carries a note saying so, because a bounding-box
+  density is not comparable with anybody else's g(r). For a self-pair (A = B, or both
+  unset) the density uses N − 1: an atom is not its own neighbour.</p>
+
+  <p>Two derived numbers follow. The <b>first peak</b> is the first local maximum of a
+  five-bin moving average that is a real excess (g ≥ 1.2) over a bin with real
+  statistics (≥ 10 pairs) — smoothing locates it, but the position reported is the raw
+  bin, so smoothing never moves a shell. The <b>first minimum</b> is the bottom of the
+  valley after it, and — unless <code>coordinationCutoff</code> overrides it — that is
+  the radius the <b>coordination number</b> is counted inside, which is the standard
+  convention, and the one that gives 12 for fcc without being told. The
+  coordination pass rebuilds the neighbour list at that smaller radius rather than
+  re-walking the <code>rMax</code> one; the cell grid is then (rMax/r<sub>c</sub>)³
+  times finer, which is the difference between visiting ten candidates per atom and a
+  thousand. The per-atom field is the coordination number; the scalar is the first-peak
+  position, so the chart over frames shows the first shell contracting or melting.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>speciesA</code>, <code>speciesB</code></td><td>string or null</td><td>null</td>
+        <td>Element of the central / neighbouring atoms; null = every atom. Partial g<sub>AB</sub>(r).</td></tr>
+    <tr><td><code>rMax</code></td><td>Å</td><td>10</td>
+        <td>Largest separation binned. Above half the shortest box edge the minimum image double-counts, and the tool says so.</td></tr>
+    <tr><td><code>bins</code></td><td>integer</td><td>200</td>
+        <td>Bin count over [0, rMax]. Thin bins resolve sharp shells but need pairs: ~700 pairs per 0.05 Å bin is ±4 % of Poisson noise.</td></tr>
+    <tr><td><code>coordinationCutoff</code></td><td>Å or null</td><td>null</td>
+        <td>Radius for the coordination number; null = the first minimum of g(r), and the value used is reported.</td></tr>
+  </table>
+  <p class="note">Strided preview: 1/n of the A atoms are used as centres and the
+  normalisation uses that count, so the curve is unbiased, only noisier.</p>
+
+  <h3>Reference</h3>
+  <p>Allen, M. P. &amp; Tildesley, D. J. (2017) <i>Computer Simulation of Liquids</i>,
+  2nd ed., §2.6 and §5.6 — g(r), its ideal-gas normalisation and the coordination
+  number as its running integral to the first minimum.</p>
+
+  <h3>Validation</h3>
+  <p>Two fixtures with an answer known before the code runs. 2000 uniform random atoms
+  in a 40 Å periodic cell — the definition of no structure — give g(r) = 1 ± 0.15 over
+  r ∈ [3, 8] Å and a coordination number inside 10 % of ρ·(4/3)πr<sub>c</sub>³ at
+  r<sub>c</sub> = 5 Å. A perfect fcc block (a = 4.05 Å, 864 atoms) puts the first peak
+  at 2.875 Å against the analytic a/√2 = 2.8638 Å (+0.39 %, one bin width at the
+  default 200 bins) and gives exactly 12 neighbours at the first minimum, with no
+  caveats emitted. An open-boundary slab reports the bounding-box note.</p>
+
+  <h2 id="diffusion">diffusion — Diffusion (MSD)</h2>
+  <p><span class="badge">perAtomField</span><span class="badge">scalar</span><span
+  class="badge">timeSeries</span> Mechanics &amp; deformation · needs a reference frame ·
+  strided preview supported</p>
+
+  <h3>Method</h3>
+  <p>Mean squared displacement against a <b>reference frame</b>, and the Einstein
+  diffusion coefficient from its slope: MSD = 6·D·t in three dimensions. The factor is
+  2d, so a 1D or 2D reading of the same data would use 2 or 4 — the commonest way to
+  be wrong by 3× about a diffusion coefficient is to disagree silently about it, so the
+  summary row names the convention it used.</p>
+
+  <p>The other way to be wrong is wrapping. A periodic dump folds atoms back into the
+  cell, so a raw r(t) − r(0) saturates at the box diagonal and D collapses towards zero
+  at long times. With <code>unwrap</code> (on by default) the tool walks the whole
+  trajectory once and accumulates the minimum-image step between <i>consecutive</i>
+  frames, which is exact as long as no atom moves more than half a box in one dump
+  interval — and when one does, the note says so and calls D a lower bound. That walk
+  is a trajectory-level quantity, cached per trajectory generation and parameter set,
+  so scrubbing through frames costs one array lookup. Time comes from the dump's own
+  <code>timestep</code> × <code>timestep_fs</code>; frames with no timestep fall back
+  to index × <code>frameInterval_ps</code>. The fit skips the first
+  <code>fitStartFraction</code> of the series — the ballistic and caging head is not
+  Fickian and would bias D upwards — and reports the ordinary-least-squares standard
+  error of the slope alongside it, in Å²/ps and in cm²/s (1 Å²/ps = 10⁻²⁰ m² /
+  10⁻¹² s = 10⁻⁴ cm²/s). The per-atom field is |Δr|², the scalar is the MSD, so the
+  chart over frames is the MSD curve itself.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>species</code></td><td>string or null</td><td>null</td><td>Element to follow; null = every atom.</td></tr>
+    <tr><td><code>timestep_fs</code></td><td>fs</td><td>1.0</td><td>Femtoseconds per LAMMPS step; time = dump timestep × this.</td></tr>
+    <tr><td><code>frameInterval_ps</code></td><td>ps</td><td>1.0</td><td>Used only when frames carry no timestep (plain XYZ).</td></tr>
+    <tr><td><code>fitStartFraction</code></td><td>fraction</td><td>0.2</td><td>Fit D on the last 80 % of the series.</td></tr>
+    <tr><td><code>unwrap</code></td><td>bool</td><td>true</td><td>Undo periodic wrapping between consecutive frames. Required for MSD in a periodic cell.</td></tr>
+  </table>
+  <p class="note">With only one frame loaded the MSD is still reported and D is not —
+  the tool never fits a slope through a single point.</p>
+
+  <h3>Reference</h3>
+  <p>Allen, M. P. &amp; Tildesley, D. J. (2017) <i>Computer Simulation of Liquids</i>,
+  2nd ed., §2.7 and §8.5 — the Einstein relation, the choice of fitting window, and why
+  unwrapped coordinates are what the relation is written in.</p>
+
+  <h3>Validation</h3>
+  <p>A synthetic Gaussian random walk with a known answer: step width σ per component
+  per frame gives MSD = 3σ²n = 6D(nΔt), so D = σ²/2Δt exactly. With σ = 0.4 Å,
+  Δt = 1 ps and 30 frames of 6000 walkers wrapped into a 12 Å cell, the tool recovers
+  D = 0.0792 Å²/ps against the analytic 0.08 (−0.98 %; every seed tried lands inside
+  1.3 %), and the MSD computed from the <i>wrapped</i> dump equals the MSD of the
+  never-wrapped truth frame for frame to 10⁻⁹ Å². Adding a 0.5 Å/frame drift, so atoms
+  cross the cell, drops the un-unwrapped MSD below 40 % of the truth — the failure this
+  option exists to prevent. Sample size is part of the test: at 500 walkers the same
+  estimator swings from −12.7 % to +5.6 % on the seed alone, which measures luck rather
+  than the code.</p>
+
+  <h2 id="thermo">thermo — Thermo (log.lammps)</h2>
+  <p><span class="badge">scalar</span><span class="badge">timeSeries</span>
+  Mechanics &amp; deformation · needs a side file (<code>log.lammps</code>) · no strided preview</p>
+
+  <h3>Method</h3>
+  <p>Everything a run measures about itself as a whole — temperature, pressure,
+  energies, box lengths, any <code>compute</code> or <code>variable</code> the deck put
+  in a <code>thermo_style custom</code> line — is in the log and nowhere in the dump.
+  This tool parses it and puts it beside the trajectory: scrub to a frame and read the
+  row LAMMPS printed at that step. The parser is header-driven and forgiving — a block
+  starts at a line whose first token is <code>Step</code> and ends at
+  <code>Loop time of …</code>, one block per <code>run</code>, so a multi-run deck
+  (equilibrate, then deform) gives several, and the deck may change
+  <code>thermo_style</code> between them. Interleaved <code>WARNING:</code> lines,
+  blank lines and the truncated tail of a log still being written are ignored rather
+  than treated as the end of a table, and the split is on any newline because
+  <code>"\r\n"</code> is one Swift character. Columns present in <i>every</i> block are
+  the ones whose concatenated series stay row-aligned; anything else is named in a
+  note rather than silently misaligned. Alignment to frames is <code>alignBy</code>:
+  <code>step</code> matches the frame's timestep to the nearest <code>Step</code> row
+  (a dump every 100 steps against thermo every 250 still lands), <code>index</code> is
+  the naive row <i>i</i> ↔ frame <i>i</i>.</p>
+
+  <p>The second job is the mechanical test, which exists <i>only</i> here: per-atom
+  stresses are optional and expensive, the box pressure is free and always printed.
+  When the log carries a length (<code>Lx</code>/<code>Ly</code>/<code>Lz</code>, or a
+  <code>c_*</code>/<code>v_*</code> alias) and the matching pressure
+  (<code>Pxx</code>/<code>Pyy</code>/<code>Pzz</code>), the tool takes the axis whose
+  strain changed most, computes engineering strain L(step)/L(step₀) − 1 and stress
+  −P (LAMMPS prints pressure, and a positive pressure is compression), converts bar to
+  GPa (×10⁻⁴), and fits <b>Young's modulus</b> over the first <code>elasticStrain</code>
+  of strain travelled. The fit range is reported with the number, so a modulus read off
+  a plastic segment is visible as one. The scalar is the stress at the frame when a
+  curve resolved, else the first requested y column — either way the chart follows
+  playback.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>logPath</code></td><td>string or null</td><td>null</td>
+        <td>Explicit log; null = <code>log.lammps</code>, then the newest <code>*.log</code>/<code>log.*</code>, beside the trajectory, in a <code>results*/</code> sibling, or one level up.</td></tr>
+    <tr><td><code>xColumn</code></td><td>string</td><td>Step</td><td>The column frames are matched against and the summary leads with.</td></tr>
+    <tr><td><code>yColumns</code></td><td>[string]</td><td>Temp, PotEng, Press</td><td>Rows shown for the current frame; ones missing from a run are named in a note.</td></tr>
+    <tr><td><code>stressStrain</code></td><td>bool</td><td>true</td><td>Derive the stress–strain curve and E when the columns allow it.</td></tr>
+    <tr><td><code>elasticStrain</code></td><td>strain</td><td>0.02</td><td>Window for the Young's-modulus fit, from the start of the curve.</td></tr>
+    <tr><td><code>alignBy</code></td><td>step | index</td><td>step</td><td>Frame timestep → nearest Step row, or row i ↔ frame i.</td></tr>
+  </table>
+  <p class="note">No log anywhere = <code>missingRequirement(.sideFile)</code>: the tool
+  greys out rather than reporting a table it does not have.</p>
+
+  <h3>Reference</h3>
+  <p>LAMMPS documentation: <code>thermo_style</code> and <code>thermo</code> (output
+  format and column names), <code>fix deform</code> (the uniaxial run this reads), and
+  the <i>Output</i> howto for the log's block structure. Pressure sign and units follow
+  the <code>metal</code>/<code>real</code> unit tables (bar).</p>
+
+  <h3>Validation</h3>
+  <p>A hand-made log with two runs — equilibration at fixed length, then tension —
+  a <code>WARNING:</code> line inside the first table and a full CRLF variant: both
+  parse to the same two blocks with the same 5 and 16 rows, the same loop times, and
+  identical results. The tension run is written as σ = E·ε with E = 70 GPa up to 2 %
+  strain and a perfectly plastic plateau after; the tool recovers 70 GPa to better than
+  1 % from the default 2 % window, and reports the plateau as the maximum stress.
+  A frame stamped step 900 reads the step-900 row (1 % strain, run 2 of 2) even when
+  its frame index is deliberately wrong, and <code>alignBy: "index"</code> reads row i
+  instead. A directory with no log throws
+  <code>missingRequirement(.sideFile)</code>.</p>
+</section>
+
+  <h2>Result shape</h2>
+  <p>Every tool returns the same object, so <code>--json</code> and the MCP tool
+  are the same document:</p>
+<pre>{
+  "summary": [ { "label": "Surface plane z", "value": "12.897", "unit": "Å" }, … ],
+  "field":   { "name": "z", "legendTitle": "z", "count": 4000,
+               "palette": { "kind": "continuous", "min": 0.0, "max": 16.8,
+                            "colormapName": "viridis" } },
+  "profile": { "axisLabel": "z − surface (Å)", "valueLabel": "probe atoms",
+               "edges": [ … n+1 … ], "values": [ … n … ], "counts": [ … n … ] },
+  "scalar":  1.42,
+  "notes":   [ "Preview: 1/4 of atoms." ]
+}</pre>
+  <p><code>field</code>, <code>profile</code> and <code>scalar</code> are present
+  only when the tool's badges say so, and <code>field.values</code> (one float per
+  atom) appears only with <code>include_field: true</code> — otherwise
+  <code>count</code> stands in for it. A time-series call replaces the whole
+  document with <code>{"tool": …, "frames": [{"frame": n, "scalar": …,
+  "summary": [ … ]}, …]}</code>.</p>
+
+  <p class="note">MDEngine · ForceField Silicon (Gitinama Inc.) ·
+  <a href="index.html">User Manual index</a></p>
+</main>
+</body>
+</html>

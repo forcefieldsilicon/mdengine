@@ -23,8 +23,20 @@ public struct HostedCredentials: Codable, Equatable {
     }
 
     public static let productionEndpoint = "https://api.forcefieldsilicon.com/v1"
-    public static let fileURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".mdengine/credentials")
+    /// Per-user MDEngine state. macOS keeps `~/.mdengine`, which the CLI and the MCP server already use.
+    /// iOS has no shared home directory (`homeDirectoryForCurrentUser` is unavailable there), so the
+    /// tracker app keeps its own copy inside the sandbox — GJOB-121.
+    public static var stateRoot: URL {
+        #if os(macOS)
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".mdengine", isDirectory: true)
+        #else
+        let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: true))
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return base.appendingPathComponent("mdengine", isDirectory: true)
+        #endif
+    }
+    public static let fileURL = HostedCredentials.stateRoot.appendingPathComponent("credentials")
 
     /// Env first (CI, one-off shells), then the credentials file.
     public static func load() -> HostedCredentials? {
@@ -156,7 +168,7 @@ public final class HostedClient {
 
     // MARK: HTTP (synchronous — CLI and MCP are single-threaded; the app calls off-main)
 
-    private func request(_ method: String, _ path: String, json: Any? = nil, body: Data? = nil,
+    func request(_ method: String, _ path: String, json: Any? = nil, body: Data? = nil,
                          absolute: URL? = nil, auth: Bool = true) throws -> (Int, Data) {
         let url = absolute ?? base.appendingPathComponent(path)
         var req = URLRequest(url: url)
@@ -184,7 +196,7 @@ public final class HostedClient {
         return out!
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, _ r: (Int, Data), expect: Set<Int> = [200, 201, 202]) throws -> T {
+    func decode<T: Decodable>(_ type: T.Type, _ r: (Int, Data), expect: Set<Int> = [200, 201, 202]) throws -> T {
         guard expect.contains(r.0) else { throw serverError(r) }
         do { return try JSONDecoder().decode(type, from: r.1) }
         catch { throw HostedError("unexpected response from \(base.host ?? "endpoint") (HTTP \(r.0)): \(String(decoding: r.1.prefix(200), as: UTF8.self))") }
@@ -226,6 +238,8 @@ public final class HostedClient {
     /// Tar the deck's directory (minus trajectories/checkpoints/logs), create the job,
     /// upload, start. Returns the endpoint's job id and writes local bookkeeping so
     /// job_status / list_jobs / fetch see it like any other job.
+    /// Reads the deck directory off disk and tars it in-process (GJOB-152), so this works in a sandbox
+    /// and on iOS as well as on the desktop.
     public func submit(input: String, spec: HostedJobSpec? = nil) throws -> String {
         let inputURL = URL(fileURLWithPath: (input as NSString).expandingTildeInPath).standardizedFileURL
         guard FileManager.default.fileExists(atPath: inputURL.path) else { throw HostedError("no such input: \(input)") }
@@ -265,21 +279,32 @@ public final class HostedClient {
     /// Download the results tarball (work/ + log.lammps + exitcode) into
     /// ~/.mdengine/jobs/<id>/results/ and mirror log/exitcode into the job dir.
     /// Returns the results directory.
+    /// Download the results tarball to `jobsRoot/<id>/results.tar.gz` and return it, WITHOUT unpacking.
+    /// Platform-neutral by construction — no Process — because unpacking is the only part that needed a
+    /// shell-out. macOS `fetch()` builds on this; the iOS tracker hands this file straight to the share
+    /// sheet, which is what "results land in Files" means (GJOB-122).
     @discardableResult
-    public func fetch(_ id: String) throws -> URL {
+    public func downloadResults(_ id: String) throws -> URL {
         struct R: Codable { let download_url: String; let bytes: Int? }
         let r = try decode(R.self, request("GET", "jobs/\(id)/results"), expect: [200])
         guard let dl = URL(string: r.download_url) else { throw HostedError("bad download_url from endpoint") }
         let got = try request("GET", "", absolute: dl, auth: false)
         guard got.0 == 200, !got.1.isEmpty else { throw HostedError("results download failed (HTTP \(got.0))") }
+        let jobDir = Self.jobsRoot.appendingPathComponent(id)
+        try FileManager.default.createDirectory(at: jobDir, withIntermediateDirectories: true)
+        let tar = jobDir.appendingPathComponent("results.tar.gz")
+        try got.1.write(to: tar)
+        return tar
+    }
 
+    @discardableResult
+    public func fetch(_ id: String) throws -> URL {
+        let tmp = try downloadResults(id)
         let jobDir = Self.jobsRoot.appendingPathComponent(id)
         let results = jobDir.appendingPathComponent("results")
         try FileManager.default.createDirectory(at: results, withIntermediateDirectories: true)
-        let tmp = jobDir.appendingPathComponent("results.tar.gz")
-        try got.1.write(to: tmp)
-        let untar = try Self.run("/usr/bin/tar", ["-xzf", tmp.path, "-C", results.path])
-        guard untar.status == 0 else { throw HostedError("untar failed: \(untar.err)") }
+        do { try Tar.extract(try Data(contentsOf: tmp), to: results) }
+        catch { throw HostedError("could not unpack the results of \(id): \(error.localizedDescription)") }
         try? FileManager.default.removeItem(at: tmp)
         // The runner tars `work/ log.lammps exitcode` at the top level; surface the two
         // bookkeeping files where local jobs keep them.
@@ -311,8 +336,7 @@ public final class HostedClient {
 
     // MARK: helpers
 
-    public static let jobsRoot = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".mdengine/jobs")
+    public static let jobsRoot = HostedCredentials.stateRoot.appendingPathComponent("jobs", isDirectory: true)
 
     /// job.json for a cloud job, if this id is one.
     public static func cloudMeta(_ id: String) -> [String: Any]? {
@@ -336,34 +360,8 @@ public final class HostedClient {
     }
 
     static func tarDeck(_ dir: URL) throws -> Data {
-        var args = ["-czf", "-", "-C", dir.path]
-        for x in deckExcludes { args += ["--exclude", x] }
-        args.append(".")
-        let r = try run("/usr/bin/tar", args)
-        guard r.status == 0 else { throw HostedError("tar of \(dir.path) failed: \(r.err)") }
-        return r.out
+        do { return try Tar.archiveGzipped(directory: dir, excluding: deckExcludes) }
+        catch { throw HostedError("could not package \(dir.lastPathComponent): \(error.localizedDescription)") }
     }
 
-    struct Shell { let status: Int32; let out: Data; let err: String }
-    static func run(_ exe: String, _ args: [String], stdin: Data? = nil) throws -> Shell {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: exe)
-        p.arguments = args
-        let o = Pipe(), e = Pipe()
-        p.standardOutput = o; p.standardError = e
-        let i = stdin.map { _ in Pipe() }
-        if let i { p.standardInput = i }
-        try p.run()
-        if let i, let stdin {
-            DispatchQueue.global().async {     // feed concurrently with the drain below: no pipe deadlock either way
-                i.fileHandleForWriting.write(stdin)
-                i.fileHandleForWriting.closeFile()
-            }
-        }
-        // Drain stdout before waiting: a multi-MB tarball would fill the pipe and deadlock.
-        let out = o.fileHandleForReading.readDataToEndOfFile()
-        let err = String(data: e.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        p.waitUntilExit()
-        return Shell(status: p.terminationStatus, out: out, err: err)
-    }
 }

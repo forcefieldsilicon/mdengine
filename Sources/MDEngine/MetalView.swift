@@ -17,6 +17,7 @@ final class InteractiveMTKView: MTKView {
     // draw calls). Drive rendering with an explicit display link instead:
     // alive exactly while the view sits in a window.
     private var link: CADisplayLink?
+    private var lastDraw: CFTimeInterval = 0
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -24,14 +25,24 @@ final class InteractiveMTKView: MTKView {
         enableSetNeedsDisplay = false
         link?.invalidate()
         link = nil
+        renderer?.markDirty()
         if window != nil {
             link = displayLink(target: self, selector: #selector(tick))
             link?.add(to: .main, forMode: .common)
         }
     }
 
+    /// The link ticks at the display rate, but a pass is encoded only when
+    /// the renderer is dirty — an idle viewport costs 0 draws/s (design §1b).
+    /// The ~1 Hz safety redraw catches anything that slipped past the flag
+    /// (appearance changes, occlusion, a stale drawable).
     @objc private func tick() {
-        draw()                          // runs the delegate's render pass
+        guard let renderer else { draw(); return }
+        let now = CACurrentMediaTime()
+        if renderer.needsRedraw || now - lastDraw >= 1.0 {
+            lastDraw = now
+            draw()                      // runs the delegate's render pass
+        }
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -87,6 +98,16 @@ struct MetalView: NSViewRepresentable {
     var presetToken: Int = 0
     /// Bumped when per-element colors/sizes change; triggers a GPU re-upload.
     var styleGeneration: Int = 0
+    /// Overlay tool colours (nil = element colours), pulled when the generation
+    /// changes — a provider, so SwiftUI never diffs a 100 k-element array.
+    var overlayGeneration: Int = 0
+    var overlayProvider: () -> [SIMD3<Float>]? = { nil }
+    /// Perceived bonds / backbone trace for the frame on screen, pulled when
+    /// the generation changes — a provider for the same reason as the overlay:
+    /// a BondSet is hundreds of thousands of indices and must never be diffed
+    /// as a SwiftUI value.
+    var bondsGeneration: Int = 0
+    var bondsProvider: () -> BondSet? = { nil }
     /// Camera-state destination: .shared for the main pane (drives the main
     /// scale bar and video export); a per-pane instance for extra panes.
     var scaleSink: ViewportScale? = ViewportScale.shared
@@ -108,6 +129,7 @@ struct MetalView: NSViewRepresentable {
         context.coordinator.generation = -1
         context.coordinator.cameraResetToken = cameraResetToken
         context.coordinator.presetToken = -1   // apply any preset on first update
+        context.coordinator.bondsGeneration = -1
         return view
     }
 
@@ -133,6 +155,17 @@ struct MetalView: NSViewRepresentable {
             context.coordinator.styleGeneration = styleGeneration
             context.coordinator.renderer?.reloadStyle()
         }
+        if context.coordinator.overlayGeneration != overlayGeneration {
+            context.coordinator.overlayGeneration = overlayGeneration
+            context.coordinator.renderer?.setColorOverride(overlayProvider())
+        }
+        if context.coordinator.bondsGeneration != bondsGeneration {
+            context.coordinator.bondsGeneration = bondsGeneration
+            // colors: nil — the renderer already knows whether an overlay is
+            // active, so the sticks follow the atoms without a second array
+            // crossing the view boundary.
+            context.coordinator.renderer?.setBonds(bondsProvider(), colors: nil)
+        }
         if let preset,
            context.coordinator.presetToken != presetToken
             || context.coordinator.appliedPreset != preset {
@@ -153,5 +186,7 @@ struct MetalView: NSViewRepresentable {
         var presetToken = -1
         var appliedPreset: RenderCore.ViewPreset?
         var styleGeneration = 0
+        var overlayGeneration = 0
+        var bondsGeneration = 0
     }
 }

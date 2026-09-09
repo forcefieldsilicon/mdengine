@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP=/Applications/MDEngine.app
+APP=${APP:-/Applications/MDEngine.app}   # override to package without touching the installed app
 VERSION=$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)
 ARCH=$(uname -m)
 BIN=.build/release
