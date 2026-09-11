@@ -77,7 +77,10 @@ final class HostedJobsModel: ObservableObject {
         submit(input: url)
     }
 
-    func submit(input: URL, gpu: String = "any", wallHours: Double = 4, force: Bool = false) {
+    /// `confirmed` = the user has already seen the spend cap for this exact submission (pricing study §3.1:
+    /// the most the job can cost, next to the balance, before anything is spent). Both alerts carry it, so
+    /// the buyer sees the number exactly once.
+    func submit(input: URL, gpu: String = "any", wallHours: Double = 4, force: Bool = false, confirmed: Bool = false) {
         busy = true
         queue.async { [weak self] in
             do {
@@ -86,23 +89,57 @@ final class HostedJobsModel: ObservableObject {
                                          label: input.deletingPathExtension().lastPathComponent,
                                          gpu: gpu, wallLimitS: Int(wallHours * 3600))
                 let caps = try? client.capabilities()
+                let acct = try? client.me()
+                let rate = HostedSpendCap.rate(gpu: gpu, caps: caps, account: acct)
+                let capLine = HostedSpendCap.line(wallHours: wallHours, ratePerHour: rate, balanceUSD: acct?.balance_usd,
+                                                  pricing: acct?.pricing ?? caps?.pricing)
+                    ?? "cap \(wallHours) h — rate unknown until the endpoint answers"
                 let (routed, pf) = DeckPreflight.route(input: input, caps: caps)  // GJOB-116: full image only when the deck needs it
                 spec.runner = routed
                 if !force {                                           // preflight before spend (GJOB-118)
                     if pf.needsAttention {
-                        let lines = pf.lines(rateHint: (caps?.rates?[gpu] ?? caps?.rates?["any"]).map { String(format: "$%.2f/h", $0) })
+                        let lines = pf.lines(rateHint: rate.map { String(format: "$%.2f/h", $0) })
                         Task { @MainActor in
                             self?.busy = false
                             let a = NSAlert()
                             a.alertStyle = .warning
                             a.messageText = pf.ok ? "This deck would not use the GPU" : "This deck needs styles no hosted image has"
-                            a.informativeText = lines.joined(separator: "\n\n")
+                            a.informativeText = (lines + [capLine]).joined(separator: "\n\n")
                             a.addButton(withTitle: pf.ok ? "Run on CPU cores anyway" : "Submit anyway (will fail)")
                             a.addButton(withTitle: "Cancel")
-                            if a.runModal() == .alertFirstButtonReturn { self?.submit(input: input, gpu: gpu, wallHours: wallHours, force: true) }
+                            if a.runModal() == .alertFirstButtonReturn {
+                                self?.submit(input: input, gpu: gpu, wallHours: wallHours, force: true, confirmed: true)
+                            }
                         }
                         return
                     }
+                }
+                if !confirmed {                                       // spend cap before spend (pricing study §3.1)
+                    Task { @MainActor in
+                        self?.busy = false
+                        let a = NSAlert()
+                        a.alertStyle = .informational
+                        a.messageText = "Run \(input.lastPathComponent) on a hosted GPU?"
+                        // GJOB-118: the two submit options a buyer can change, in the same alert as the cap they set.
+                        // Changing either re-runs the cap so the number shown is always for the exact submission.
+                        let gpus = Array(Set((caps?.rates ?? [:]).keys).union(["any", "rtx4090"])).sorted { $0 == "any" || ($1 != "any" && $0 < $1) }
+                        let options = HostedSubmitOptions(gpus: gpus, gpu: gpu, wallHours: wallHours)
+                        a.accessoryView = options
+                        let pricing = acct?.pricing ?? caps?.pricing
+                        let how = (pricing?.isJob ?? false)
+                            ? "Priced by the work the run does (steps and atom-steps, read from its own log when it finishes); the wall limit stops it and is the most it can cost. A run that dies inside the GPU runtime is not billed."
+                            : "Billed to the second while it runs; the wall limit stops it."
+                        a.informativeText = capLine + "\n\n" + how + " Cancel any time from Accelerated Runs."
+                        a.addButton(withTitle: "Run")
+                        a.addButton(withTitle: "Cancel")
+                        if a.runModal() == .alertFirstButtonReturn {
+                            let (g2, w2) = (options.gpu, options.wallHours)
+                            let changed = g2 != gpu || abs(w2 - wallHours) > 1e-9
+                            // changed -> show the cap once more, for the new numbers; unchanged -> go
+                            self?.submit(input: input, gpu: g2, wallHours: w2, force: force, confirmed: !changed)
+                        }
+                    }
+                    return
                 }
                 let id = try client.submit(input: input.path, spec: spec)
                 Task { @MainActor in
@@ -321,5 +358,43 @@ struct HostedSettingsView: View {
             }
             DispatchQueue.main.async { status = result; checking = false }
         }
+    }
+}
+
+
+/// The submit options shown inside the pre-submit alert (GJOB-118): GPU class and wall limit. Plain AppKit so it
+/// can be an NSAlert accessory; values are read back after the alert returns.
+final class HostedSubmitOptions: NSView {
+    private let gpuPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let wallField = NSTextField(string: "")
+    private let gpus: [String]
+
+    init(gpus: [String], gpu: String, wallHours: Double) {
+        self.gpus = gpus
+        super.init(frame: NSRect(x: 0, y: 0, width: 340, height: 56))
+        gpuPopup.addItems(withTitles: gpus)
+        gpuPopup.selectItem(withTitle: gpus.contains(gpu) ? gpu : (gpus.first ?? "any"))
+        wallField.stringValue = HostedSpendCap.hoursText(wallHours)
+        wallField.placeholderString = "hours"
+        wallField.alignment = .right
+        let gpuLabel = NSTextField(labelWithString: "GPU:"), wallLabel = NSTextField(labelWithString: "Wall limit (h):")
+        let row1 = NSStackView(views: [gpuLabel, gpuPopup]), row2 = NSStackView(views: [wallLabel, wallField])
+        for r in [row1, row2] { r.orientation = .horizontal; r.spacing = 8 }
+        wallField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        gpuPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
+        let grid = NSStackView(views: [row1, row2])
+        grid.orientation = .vertical; grid.alignment = .leading; grid.spacing = 6
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(grid)
+        NSLayoutConstraint.activate([grid.leadingAnchor.constraint(equalTo: leadingAnchor), grid.topAnchor.constraint(equalTo: topAnchor),
+                                     grid.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor), grid.bottomAnchor.constraint(equalTo: bottomAnchor)])
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    var gpu: String { gpuPopup.titleOfSelectedItem ?? gpus.first ?? "any" }
+    /// The typed wall limit, clamped to [0.1, 48] h; unparsable text keeps 4 h (the endpoint's own default).
+    var wallHours: Double {
+        guard let v = Double(wallField.stringValue.replacingOccurrences(of: ",", with: ".")) , v.isFinite else { return 4 }
+        return min(max(v, 0.1), 48)
     }
 }

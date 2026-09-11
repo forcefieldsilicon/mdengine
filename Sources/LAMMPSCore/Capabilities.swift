@@ -43,11 +43,14 @@ public struct HostedCapabilities: Codable {
     public let routing: HostedRouting?
     /// Packages on no hosted image by decision (KIM), with the sentence to show.
     public let excluded_packages: [String: String]?
+    /// How jobs are priced (GJOB-129); nil from an endpoint older than the flip.
+    public let pricing: HostedPricing?
     public var defaultRunner: String { default_runner ?? "lammps" }
     public var lammps: HostedRunnerCapabilities? { runners[defaultRunner] ?? runners["lammps"] }
     public init(runners: [String: HostedRunnerCapabilities], default_runner: String? = "lammps", rates: [String: Double]? = nil,
-                routing: HostedRouting? = nil, excluded_packages: [String: String]? = nil) {
+                routing: HostedRouting? = nil, excluded_packages: [String: String]? = nil, pricing: HostedPricing? = nil) {
         self.runners = runners; self.default_runner = default_runner; self.rates = rates; self.routing = routing; self.excluded_packages = excluded_packages
+        self.pricing = pricing
     }
 }
 

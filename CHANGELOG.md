@@ -8,6 +8,18 @@ and published, never typed into the page.
 Format: `## <version> — <YYYY-MM-DD>` followed by one `- ` line per user-visible change. Keep
 each line to one sentence a user can act on; internal refactors do not belong here.
 
+<!-- NEXT RELEASE: add under its own "## <version> — <date>" heading (site_sections.py reads only "- " lines under a dated heading):
+     -->
+
+## 0.7.1 — 2026-09-11
+
+- Pricing by work: the app, CLI and MCP now read how the hosted tier prices jobs from the endpoint and show it before you submit — per-class prices per billion atom-steps, the per-job base, and the wall-limit cap that a job can never exceed; `mdengine account` and `job` status show the basis a job was billed on.
+- The bundled ReaxFF iron-oxidation example keeps its oxygen in the box with a reflecting ceiling; at 600 K the gas reached the fixed top face, which lost atoms on the CPU and crashed the hosted GPU run with a CUDA fault.
+- Preflight (`mdengine capabilities <deck>`, the app, MCP) now notes a deck with a non-periodic face and no wall fix before you submit it.
+- Accelerated Runs: the pre-submit dialog lets you pick the GPU class and the wall limit, recomputes the spend cap for what you picked, and describes the billing the way the hosted tier actually does it.
+- New analysis tool: Grain boundaries — grain count, sizes, boundary fraction and misorientation distribution from PTM orientations; colour by grain in the viewer.
+- License: MDEngine is now released under the Business Source License 1.1 — use it freely, including at work; do not resell it as a hosted service; each version becomes MPL-2.0 four years after release. 0.7.0 and earlier stay MIT. -->
+
 ## 0.7.0 — 2026-09-09
 
 - Analysis tools in the inspector, the CLI and MCP: 13 tools that each answer one question — Adhesion (is the ligand still bound, and why), Pull-off energetics (what did the pull cost), Conformation (is the fold holding), Crystallinity, PTM (orientation and grains), Radial distribution, Diffusion, Deformation, Thermo (stress–strain from log.lammps), Z-profile, FEP results, Unbinding kinetics (τRAMD), Colour by column.

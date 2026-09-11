@@ -637,7 +637,8 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
         var frames = try parseTrajectoryFrames(path: path)
         var overrides = a["params"] as? [String: Any] ?? [:]
         if frames.count == 1, frames[0].atoms.isEmpty {          // side-file anchor (dir / .json / .csv / log)
-            let key = ["fep_results": "jsonPath", "kinetics_tramd": "csvPath",
+            let key = ["fep_results": "jsonPath", "campaign_matrix": "jsonPath",
+                       "kinetics_tramd": "csvPath",
                        "pulloff_energetics": "csvPath", "thermo": "logPath"][toolId]
             if let key, !(path as NSString).pathExtension.isEmpty, overrides[key] == nil { overrides[key] = path }
             if let f = a["frame"] as? String, let n = Int(f), n > 0 { frames = Array(repeating: Frame(atoms: []), count: n + 1) }
@@ -851,7 +852,12 @@ func callTool(_ name: String, _ a: [String: Any]) throws -> String {
     case "list_hosts":
         var cloud = "cloud: hosted GPU tier — "
         if let c = try? HostedClient.fromSavedCredentials(), let me = try? c.me() {
-            cloud += "\(c.base.host ?? c.base.absoluteString), balance $\(String(format: "%.2f", me.balance_usd)), rates \(me.rate_table.sorted { $0.key < $1.key }.map { "\($0.key) $\($0.value)/h" }.joined(separator: ", "))"
+            cloud += "\(c.base.host ?? c.base.absoluteString), balance $\(String(format: "%.2f", me.balance_usd)), "
+            if let p = me.pricing, p.isJob {
+                cloud += "priced by work (\((p.usd_per_gatom_step ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key) $\($0.value)" }.joined(separator: ", ")) per billion atom-steps; never more than wall limit × rate)"
+            } else {
+                cloud += "rates \(me.rate_table.sorted { $0.key < $1.key }.map { "\($0.key) $\($0.value)/h" }.joined(separator: ", "))"
+            }
         } else {
             cloud += "no API key (mdengine login <mde_key>; keys come with a credit pack at forcefieldsilicon.com/mdengine)"
         }
@@ -992,7 +998,7 @@ while let line = readLine(strippingNewline: true) {
         let version = params?["protocolVersion"] as? String ?? "2025-06-18"
         reply(id, ["protocolVersion": version,
                    "capabilities": ["tools": [String: Any]()],
-                   "serverInfo": ["name": "mdengine", "version": "0.7.0"]])
+                   "serverInfo": ["name": "mdengine", "version": "0.7.1"]])
     case "ping":
         reply(id, [:])
     case "tools/list":

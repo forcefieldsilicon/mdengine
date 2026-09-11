@@ -110,7 +110,7 @@ discovery pointer, which is what makes clients offer the sign-in. Tools: `accoun
 `job_results`, `list_jobs`, `delete_results`, `cancel_job`. Discovery card:
 `https://api.forcefieldsilicon.com/.well-known/mcp/server-card.json`. The hosted service (endpoint, billing, GPU launcher) is operated by ForceField Silicon and its
 source is not part of this repository; the client side of it (`HostedClient`, CLI `run --gpu`,
-MCP `host=cloud`) is here under the MIT license like everything else.
+MCP `host=cloud`) is here under the same license as everything else.
 
 **Preflight before spend (GJOB-118).** `GET /v1/capabilities` publishes the hosted image's LAMMPS
 version, packages and every style with a `gpu` flag: true = KOKKOS-accelerated, false = the style
@@ -195,4 +195,12 @@ hosted GPU tier.
 
 ## License
 
-MIT © Gitinama Inc. (d/b/a ForceField Silicon)
+Business Source License 1.1 (BUSL-1.1), © 2026 Gitinama Inc. (ForceField Silicon). See `LICENSE`.
+
+In short: you may read, copy, modify and redistribute MDEngine, and you may use it in
+production for your own research, engineering or commercial work, on your own machines or
+on machines you rent. The one thing the license withholds is offering MDEngine itself, or a
+service whose value comes mainly from it, to third parties as a hosted, managed or embedded
+service. Each version converts to the Mozilla Public License 2.0 four years after its first
+public release. Versions 0.7.0 and earlier were released under MIT and stay MIT.
+Other arrangements: arvand@gitinama.tech.

@@ -58,6 +58,7 @@ private let toolWhenToUse: [String: String] = [
     "ptm": "Grains and orientation: template matching robust to thermal noise, per-atom lattice orientation (IPF colour), grain boundaries by disorientation, grain count.",
     "kinetics_tramd": "How long does it stay bound: τRAMD residence time with bootstrap CI from tramd_times.csv, survival curve over replicas; k_off rank order, not absolute.",
     "fep_results": "Which compound to make next: ranked ΔΔG ± uncertainty from an OpenFE relative binding free energy run (results.json), overlap and convergence flags, cycle closure.",
+    "campaign_matrix": "Which of my ligands, on which receptor: the ligand × receptor grid from a screening campaign (matrix.json) as TIERS with error bars — not a rank order — plus selectivity ratios, the resolution floor achieved, coverage, and every compromise behind the numbers.",
     "pulloff_energetics": "What did the pull cost: F(t) from force_curve.csv, rupture force, work of separation, Bell–Evans across velocities and Jarzynski only when the seeds justify it.",
 ]
 
@@ -272,6 +273,7 @@ private let toolChoices: [String: [String: [String]]] = [
     "deformation": ["quantity": ["shear", "volumetric", "d2min", "displacement", "rearranged", "vonmises_stress"]],
     "ptm": ["quantity": ["structure", "orientation", "rmsd", "gb", "shear"]],
     "fep_results": ["sortBy": ["rank", "ddG", "error"]],
+    "campaign_matrix": ["sortBy": ["tier", "value", "band"]],
     "conformation": ["selection": ["ca", "backbone", "heavy", "all"], "quantity": ["rmsf", "dssp", "displacement"]],
     "adhesion": ["quantity": ["contacts", "interactions"]],
     "thermo": ["alignBy": ["step", "index"]],

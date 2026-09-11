@@ -1,5 +1,5 @@
 #!/bin/bash
-# MDEngine pull-runner (GJOB-093). Implements the pod side of hosted/CONTRACT.md v1.
+# MDEngine pull-runner (GJOB-093). Implements the pod side of CONTRACT.md in the MDEngine-service repo v1.
 # Env (set by the launcher on pod creation): MDE_ENDPOINT, MDE_JOB_ID, MDE_JOB_TOKEN.
 # Sequence: GET job → download+untar input → run lmp under `timeout` with a heartbeat → tar results
 # → PUT to presigned URL → POST done → exit. Never needs inbound network, ssh, or a public IP.

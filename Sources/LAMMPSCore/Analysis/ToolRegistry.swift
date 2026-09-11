@@ -51,6 +51,7 @@ public final class ToolRegistry {
         register(ColumnFieldTool.self)
         register(CrystallinityTool.self)
         register(PTMTool.self)
+        register(GrainBoundaryTool.self)
         register(ConformationTool.self)
         register(RDFTool.self)
         register(DiffusionTool.self)
@@ -58,6 +59,7 @@ public final class ToolRegistry {
         register(AdhesionTool.self)
         register(PullOffEnergeticsTool.self)
         register(FEPResultsTool.self)
+        register(CampaignMatrixTool.self)
         register(KineticsTool.self)
         register(DeformationTool.self)
     }

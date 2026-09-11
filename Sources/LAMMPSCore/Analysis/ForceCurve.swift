@@ -29,7 +29,9 @@ public struct ForceCurve {
         /// Median reporting interval, for time-based frame alignment.
         public var reportInterval_ps: Double? {
             guard time_ps.count > 1 else { return nil }
-            let d = (1..<time_ps.count).map { time_ps[$0] - time_ps[$0 - 1] }.filter { $0 > 0 }
+            // `(i: Int)` spelled out: left implicit, the solver weighs every integer/Double overload of the
+            // subscript arithmetic and times out on Linux (GJOB-190).
+            let d = (1..<time_ps.count).map { (i: Int) -> Double in time_ps[i] - time_ps[i - 1] }.filter { $0 > 0 }
             return d.isEmpty ? nil : Energetics.median(d)
         }
     }

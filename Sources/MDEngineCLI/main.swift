@@ -114,12 +114,42 @@ func takeOption(_ flag: String, _ args: inout [String]) -> String? {
 }
 
 func performanceCores() -> Int {
+    // `hw.perflevel0.physicalcpu` is the P-core count on Apple silicon -- the only cores worth handing to
+    // LAMMPS. sysctlbyname is Darwin-only, so off-Apple (GJOB-190) we take what the scheduler offers:
+    // activeProcessorCount already excludes cores taken away by cgroup/affinity limits, which is the
+    // closest analogue to "cores you should actually use" on a Linux box or in a container.
+    #if canImport(Darwin)
     var n: Int32 = 0
     var len = MemoryLayout<Int32>.size
     if sysctlbyname("hw.perflevel0.physicalcpu", &n, &len, nil, 0) == 0, n > 0 {
         return Int(n)
     }
-    return max(1, ProcessInfo.processInfo.processorCount / 2)
+    #endif
+    return max(1, ProcessInfo.processInfo.activeProcessorCount / 2)
+}
+
+/// Wait for a spawned process and return its exit status.
+///
+/// `Process.waitUntilExit()` deadlocks on Linux (swift-corelibs-foundation, verified on swift:6.0-jammy:
+/// the child runs and prints, the wait never returns), which would hang `mdengine run` forever off-Apple.
+/// waitpid(2) is what waitUntilExit is meant to be doing anyway, so off-Apple we call it directly.
+func waitForExit(_ task: Process) -> Int32 {
+    #if canImport(Darwin)
+    task.waitUntilExit()
+    return task.terminationStatus
+    #else
+    var status: Int32 = 0
+    while true {
+        let r = waitpid(task.processIdentifier, &status, 0)
+        if r == task.processIdentifier {
+            // Normal exit -> the low byte is clear and the status is in the next one; a signal -> report 128+n
+            // the way a shell does, so a segfaulting LAMMPS is still distinguishable from a clean failure.
+            return (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
+        }
+        if r < 0 && errno == EINTR { continue }
+        return -1
+    }
+    #endif
 }
 
 func findLAMMPS() -> String? {
@@ -182,7 +212,7 @@ func hostedWaitAndFetch(_ client: HostedClient, _ id: String) -> Int32 {
 
 /// Full parse (atoms + box + per-atom columns) — analysis tools need more than
 /// `readFrames`' bare atom lists.
-/// Side-file tools (fep_results, kinetics_tramd, pulloff_energetics, thermo) do not need atoms:
+/// Side-file tools (fep_results, campaign_matrix, kinetics_tramd, pulloff_energetics, thermo) do not need atoms:
 /// a run directory, a .json or a .csv is accepted and stands in as a one-frame anchor whose
 /// `sourceURL` the tool searches from. Everything else is parsed as a trajectory.
 func isSideFileAnchor(_ path: String) -> Bool {
@@ -422,7 +452,8 @@ case "analyze":
     if isSideFileAnchor(path) {
         // The side file IS the input: hand it to the tool explicitly and let --frame N mean
         // "row / edge N" by giving the anchor N+1 empty frames.
-        let key = ["fep_results": "jsonPath", "kinetics_tramd": "csvPath",
+        let key = ["fep_results": "jsonPath", "campaign_matrix": "jsonPath",
+                   "kinetics_tramd": "csvPath",
                    "pulloff_energetics": "csvPath", "thermo": "logPath"][toolId]
         if let key, !(path as NSString).pathExtension.isEmpty, overrides[key] == nil { overrides[key] = path }
         if framesSpec != nil { fail("with a side file as input, use --frame N (row/edge index), or pass the trajectory for --all") }
@@ -540,9 +571,10 @@ case "run":
         let force = takeFlag("--force", &args)
         let client: HostedClient
         do { client = try HostedClient.fromSavedCredentials() } catch { fail(error.localizedDescription) }
+        let caps = try? client.capabilities()
+        let acct = try? client.me()
         if runner == nil || runner == "lammps" {                     // preflight BEFORE spend (GJOB-118), routed (GJOB-116)
-            let caps = try? client.capabilities()
-            let rate = caps?.rates?[gpu] ?? caps?.rates?["any"]
+            let rate = HostedSpendCap.rate(gpu: gpu, caps: caps, account: acct)
             let (routed, pf) = DeckPreflight.route(input: URL(fileURLWithPath: (input as NSString).expandingTildeInPath), caps: caps)
             for l in pf.lines(rateHint: rate.map { String(format: "$%.2f/h", $0) }) { FileHandle.standardError.write(Data("preflight: \(l)\n".utf8)) }
             if pf.needsAttention && !force {
@@ -550,6 +582,11 @@ case "run":
                            : "not submitted: the deck needs styles no hosted image has (add --force to submit anyway; it will fail at startup)")
             }
             if let routed { runner = routed }                         // same decision the endpoint makes at start; make it explicit
+        }
+        // Spend cap before spend (pricing study §3.1): the wall limit bounds the bill, say so with the balance.
+        if let cap = HostedSpendCap.line(wallHours: wallH, ratePerHour: HostedSpendCap.rate(gpu: gpu, caps: caps, account: acct),
+                                         balanceUSD: acct?.balance_usd, pricing: acct?.pricing ?? caps?.pricing) {
+            print("mdengine: \(cap)")
         }
         let spec = HostedJobSpec(input: input, label: label, gpu: gpu,
                                  wallLimitS: Int(wallH * 3600), estimateS: Int(estMin * 60), launch: launch, runner: runner)
@@ -587,8 +624,7 @@ case "run":
     // Inherit stdio so thermo output streams live to the terminal.
     print("mdengine: \(lmp) -sf omp -pk omp \(threads) -in \(inputURL.lastPathComponent)")
     do { try task.run() } catch { fail("failed to launch LAMMPS: \(error.localizedDescription)") }
-    task.waitUntilExit()
-    exit(task.terminationStatus)
+    exit(waitForExit(task))
 
 case "login":
     guard let key = args.first, key.hasPrefix("mde_") else { fail("usage: mdengine login <mde_key> [--endpoint URL]") }
@@ -636,7 +672,16 @@ case "account":
         print("endpoint: \(client.base.absoluteString)")
         print("balance:  $\(String(format: "%.2f", acct.balance_usd))")
         let rates = acct.rate_table.sorted { $0.key < $1.key }.map { "\($0.key) $\(String(format: "%.2f", $0.value))/h" }
-        print("rates:    \(rates.joined(separator: ", "))")
+        if let p = acct.pricing, p.isJob {
+            let steps = p.usd_per_mstep ?? [:]
+            let prices = (p.usd_per_gatom_step ?? [:]).sorted { $0.key < $1.key }.map { k, v -> String in
+                let m = steps[k].map { String(format: "$%g per million steps + ", $0) } ?? ""
+                return "\(k) \(m)$\(String(format: "%g", v)) per billion atom-steps" }
+            print("pricing:  by work — \(prices.joined(separator: "; "))" + ((p.base_usd_per_job ?? 0) > 0 ? String(format: " + $%.2f per job", p.base_usd_per_job!) : ""))
+            print("cap:      a job never costs more than its wall limit at \(rates.joined(separator: ", "))")
+        } else {
+            print("rates:    \(rates.joined(separator: ", "))")
+        }
         print("credits:  https://forcefieldsilicon.com/mdengine")
     } catch { fail(error.localizedDescription) }
 
@@ -670,11 +715,15 @@ case "job":
     } catch { fail(error.localizedDescription) }
 
 case "gui":
+    #if canImport(Darwin)
     let task = Process()
     task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     task.arguments = ["-a", "MDEngine"]
     try? task.run()
-    task.waitUntilExit()
+    _ = waitForExit(task)
+    #else
+    fail("mdengine gui is macOS only — MDEngine.app does not exist on this platform")
+    #endif
 
 case "-h", "--help", "help":
     print(usage)

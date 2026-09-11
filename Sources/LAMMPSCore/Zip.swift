@@ -138,10 +138,15 @@ public enum Zip {
     /// MS-DOS time/date fields (2-second resolution, 1980 epoch) as the zip format wants them.
     static func dosDateTime(_ date: Date) -> (time: UInt16, date: UInt16) {
         let c = Calendar(identifier: .gregorian).dateComponents(in: TimeZone.current, from: date)
-        let year = max(1980, min(2107, c.year ?? 1980))
-        let t = UInt16((c.hour ?? 0) << 11 | (c.minute ?? 0) << 5 | (c.second ?? 0) / 2)
-        let d = UInt16((year - 1980) << 9 | (c.month ?? 1) << 5 | (c.day ?? 1))
-        return (t, d)
+        // Every intermediate is spelled Int on purpose: as one packed expression the constraint solver has
+        // to consider every integer overload of <<, | and / at once, and times out outright on Linux
+        // (GJOB-190). Same arithmetic, one type per line.
+        let year: Int = max(1980, min(2107, c.year ?? 1980))
+        let hour: Int = c.hour ?? 0, minute: Int = c.minute ?? 0, second: Int = c.second ?? 0
+        let month: Int = c.month ?? 1, day: Int = c.day ?? 1
+        let t: Int = (hour << 11) | (minute << 5) | (second / 2)
+        let d: Int = ((year - 1980) << 9) | (month << 5) | day
+        return (UInt16(t), UInt16(d))
     }
 }
 

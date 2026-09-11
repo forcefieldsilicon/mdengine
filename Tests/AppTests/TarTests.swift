@@ -161,6 +161,75 @@ final class TarTests: XCTestCase {
         XCTAssertTrue(try Tar.entries(of: a).isEmpty)
     }
 
+    // MARK: - the pure-Swift DEFLATE path (GJOB-190)
+    //
+    // The Linux CLI has no Compression framework, so Tar falls back to `storedDeflate`/`pureInflate` there.
+    // Nothing on macOS exercises that path in production, which is exactly why it is tested here: both
+    // directions are cross-checked against Apple's implementation, so a disagreement fails on this Mac
+    // rather than silently corrupting a results download on a Linux box.
+
+    func testPureInflateReadsWhatAppleCompressionDeflated() throws {
+        // Compressible enough that Apple's encoder emits real Huffman blocks with back-references -- the
+        // part of RFC 1951 that a stored-block-only decoder would not survive.
+        let text = String(repeating: "run 5000\nthermo 100\nfix nvt all nvt temp 300 300 100\n", count: 400)
+        let body = Data(text.utf8)
+        let deflated = try Tar.deflate(body)
+        XCTAssertLessThan(deflated.count, body.count / 4, "Apple's encoder should have actually compressed this")
+        XCTAssertEqual(try Tar.pureInflate(deflated, hint: body.count), body)
+    }
+
+    func testAppleCompressionReadsWhatStoredDeflateWrote() throws {
+        // Stored blocks are what the Linux CLI uploads inside its gzip framing; real gunzip (and the
+        // endpoint's runner) must accept them, and Apple's inflate standing in for that is the cheap check.
+        let body = Data((0..<200_000).map { (i: Int) -> UInt8 in UInt8((i * 31 + i / 97) % 256) })  // > 65535: multi-block
+        let stored = Tar.storedDeflate(body)
+        XCTAssertEqual(try Tar.inflate(stored, hint: body.count), body)
+    }
+
+    func testPureInflateRoundTripsStoredBlocksAtTheEdges() throws {
+        // Empty and exactly-one-block inputs are where the block loop's final-flag maths goes wrong.
+        for n in [0, 1, 65534, 65535, 65536] {
+            let body = Data((0..<n).map { (i: Int) -> UInt8 in UInt8(i % 251) })
+            XCTAssertEqual(try Tar.pureInflate(Tar.storedDeflate(body), hint: n), body, "n = \(n)")
+        }
+    }
+
+    func testPureInflateReadsWhatRealGzipWrote() throws {
+        // The load-bearing case: results tarballs are gzipped by GNU tar/zlib, whose dynamic-Huffman blocks
+        // are what the Linux CLI actually has to decode. Apple's encoder is not a substitute for that here,
+        // so this test compresses with the real /usr/bin/gzip and reads it back with the pure decoder.
+        let text = String(repeating: "1 1 4.05 0.00 0.00 -3.36 12.7\n", count: 3000)
+        let raw = Data(text.utf8)
+        let plain = dir.appendingPathComponent("dump.lammpstrj")
+        try raw.write(to: plain)
+        XCTAssertEqual(try sh("/usr/bin/gzip", ["-9", plain.path]), 0)
+        let gz = try Data(contentsOf: dir.appendingPathComponent("dump.lammpstrj.gz"))
+        // gzip -9 on a plain file sets FNAME, so let gunzip's header parsing do the skipping -- but check the
+        // pure inflate directly on the deflate body, since on macOS gunzip() would take the Apple path.
+        var p = gz.startIndex + 10
+        if gz[gz.startIndex + 3] & 0x08 != 0 { while gz[p] != 0 { p += 1 }; p += 1 }
+        XCTAssertEqual(try Tar.pureInflate(Data(gz[p..<(gz.endIndex - 8)]), hint: raw.count), raw)
+    }
+
+    func testPureInflateRejectsGarbage() throws {
+        // A corrupt download must throw, not return a plausible-looking prefix.
+        XCTAssertThrowsError(try Tar.pureInflate(Data([0xff, 0xff, 0xff, 0xff]), hint: 16))
+    }
+
+    func testGzipOfARealArchiveInflatesWithBothPaths() throws {
+        // End to end on the shape that actually crosses the wire: a tarred deck, gzipped, then read back by
+        // the pure decoder after Apple's encoder made it.
+        try write("in.deck", String(repeating: "pair_style eam/alloy\n", count: 500))
+        try write("data/Al.data", String(repeating: "1 1 0.0 0.0 0.0\n", count: 2000))
+        let raw = try Tar.archive(directory: dir)
+        let gz = try Tar.gzip(raw)
+        // Strip the 10-byte header and 8-byte trailer the way gunzip does, then inflate purely.
+        let body = Data(gz[(gz.startIndex + 10)..<(gz.endIndex - 8)])
+        let expanded = try Tar.pureInflate(body, hint: raw.count)
+        XCTAssertEqual(expanded, raw)
+        XCTAssertEqual(Tar.crc32(expanded), Tar.readLE32(gz, gz.endIndex - 8))
+    }
+
     func testBinaryFileSurvivesExactly() throws {
         // Trajectories are not text; an off-by-one in the padding maths would corrupt them.
         let bytes = Data((0..<5000).map { UInt8(($0 * 7) % 256) })

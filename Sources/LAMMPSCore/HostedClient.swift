@@ -1,4 +1,9 @@
 import Foundation
+// URLSession lives in FoundationNetworking off-Apple (swift-corelibs-foundation splits it out); the Linux
+// CLI (GJOB-190) links LAMMPSCore whole, so this file has to compile there.
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // Hosted accelerated runs — the client side of hosted/CONTRACT.md (GJOB-091).
 //
@@ -27,7 +32,9 @@ public struct HostedCredentials: Codable, Equatable {
     /// iOS has no shared home directory (`homeDirectoryForCurrentUser` is unavailable there), so the
     /// tracker app keeps its own copy inside the sandbox — GJOB-121.
     public static var stateRoot: URL {
-        #if os(macOS)
+        // Linux/Windows get the same `~/.mdengine` as macOS: the CLI is the only surface there and its
+        // `login`/`account` commands must find the key a user dropped in by hand.
+        #if os(macOS) || os(Linux) || os(Windows)
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".mdengine", isDirectory: true)
         #else
         let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
@@ -79,6 +86,26 @@ public struct HostedAccount: Codable {
     public let balance_usd: Double
     public let rate_table: [String: Double]
     public let keys_created: String?
+    /// How jobs are priced, as the server says (GJOB-129). nil from an endpoint older than the flip = metered.
+    public let pricing: HostedPricing?
+}
+
+/// The `pricing` block on /v1/me and /v1/capabilities. `mode` is "job" (the deck's own work in atom-steps at
+/// per-class prices, capped at wall × rate) or "metered" (per second of pod time at the rate table).
+public struct HostedPricing: Codable, Equatable {
+    public let mode: String
+    public let usd_per_gatom_step: [String: Double]?
+    /// Per-class price per million timesteps: the part of a GPU step that does not scale with atoms.
+    public let usd_per_mstep: [String: Double]?
+    public let base_usd_per_job: Double?
+    public let metered_rate_table: [String: Double]?
+    public let rule: String?
+    public var isJob: Bool { mode == "job" }
+    public init(mode: String, usd_per_gatom_step: [String: Double]? = nil, usd_per_mstep: [String: Double]? = nil,
+                base_usd_per_job: Double? = nil, metered_rate_table: [String: Double]? = nil, rule: String? = nil) {
+        self.mode = mode; self.usd_per_gatom_step = usd_per_gatom_step; self.usd_per_mstep = usd_per_mstep; self.base_usd_per_job = base_usd_per_job
+        self.metered_rate_table = metered_rate_table; self.rule = rule
+    }
 }
 
 public struct HostedJobSpec: Codable {
@@ -112,6 +139,10 @@ public struct HostedJobStatus: Codable {
     public let exitcode: Int?
     public let error: String?
     public let attempt: Int?
+    /// Billing basis frozen at finish ("job" | "metered") and the work measured, when the server reports them.
+    public let billing: String?
+    public let atom_steps: Int?
+    public let work_class: String?
 
     public var isTerminal: Bool { ["done", "failed", "cancelled"].contains(state) }
 
@@ -120,7 +151,8 @@ public struct HostedJobStatus: Codable {
         var s = "\(id): \(state)"
         if let g = gpu, state != "created", state != "uploaded" { s += " on \(g)" }
         if let c = cost_usd, c > 0 { s += String(format: "  $%.4f", c) }
-        if let b = billed_s, b > 0 { s += " (\(b) s billed)" }
+        if billing == "job", let a = atom_steps { s += " (\(a) atom-steps, priced by work)" }
+        else if let b = billed_s, b > 0 { s += " (\(b) s billed)" }
         if let e = error { s += "  error: \(e)" }
         if let x = exitcode, isTerminal { s += "  exit \(x)" }
         return s

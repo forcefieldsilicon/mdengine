@@ -29,6 +29,7 @@ targets:
     platform: iOS
     sources:
       - path: RunsApp.swift
+      - path: Assets.xcassets
     dependencies:
       - package: MDEngine
         product: MDEngineRunsUI
@@ -54,6 +55,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.forcefieldsilicon.mdengine.runs
+        # The App Store rejects a build with no icon. Assets.xcassets/AppIcon.appiconset holds a single
+        # full-bleed 1024x1024 with NO alpha channel: iOS 17+ derives every smaller size from it, and an
+        # alpha channel is an automatic upload rejection. Derived from scripts/AppIcon.icns (the macOS
+        # icon) by cropping its baked-in rounded rect, flattening onto the same navy, and insetting to 90%
+        # so the iOS squircle mask cannot clip the spheres. See scripts/make_ios_icon.swift.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: 6CVRWYN3A9
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1"
@@ -66,6 +73,26 @@ targets:
         # "conflicting provisioning settings" error. The real fix for the archive asking Apple for a
         # development profile was the explicit Release scheme below, not a signing override.
 
+  # Screenshot automation only, and never part of the shipped app: `xcodebuild archive` builds the app
+  # target alone, and a bundle.ui-testing target is not embedded in the .app. It exists because the App
+  # Store needs 6.9" shots of the signed-in screens, which need a key in the Keychain, which needs a tap
+  # that no shell tool can perform. See UITests/ScreenshotFlow.swift and scripts/screenshot_stub.py.
+  MDEngineRunsUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: MDEngineRuns
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.forcefieldsilicon.mdengine.runs.uitests
+        DEVELOPMENT_TEAM: 6CVRWYN3A9
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.9"
+        TEST_TARGET_NAME: MDEngineRuns
+        GENERATE_INFOPLIST_FILE: YES
+
 # An explicit shared scheme: with none, xcodebuild synthesises one whose archive action builds Debug, and
 # Debug signs for development.
 schemes:
@@ -75,5 +102,9 @@ schemes:
         MDEngineRuns: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - MDEngineRunsUITests
     archive:
       config: Release

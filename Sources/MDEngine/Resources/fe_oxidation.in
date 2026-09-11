@@ -32,6 +32,9 @@ fix hold bottom setforce 0.0 0.0 0.0
 
 velocity mobile create 600.0 4928459
 fix 1 mobile nvt temp 600.0 600.0 25.0
+# the gas rises about 5 Å per 1200 steps at 600 K; the box top is a fixed face, so bounce atoms back
+# instead of losing them (a lost atom stops the run; on the GPU runner it can end in a CUDA fault)
+fix ceiling mobile wall/reflect zhi EDGE
 
 timestep 0.25
 thermo 100

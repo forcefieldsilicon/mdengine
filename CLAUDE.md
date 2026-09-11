@@ -7,9 +7,10 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
 
 ## Commands
 - Build: `swift build` · Tests: `swift test` (43 cases, keep green)
-- PUBLIC REPO = open core (arvand 2026-09-09): app/CLI/MCP are MIT; `hosted/` (endpoint, OAuth, launcher,
+- PUBLIC REPO = open core (arvand 2026-09-09): app/CLI/MCP are published under BUSL-1.1 from the first
+  release after 0.7.0 (arvand 2026-09-10; ≤ 0.7.0 stay MIT; rationale docs/internal/LICENSE-DECISION.md); `hosted/` (endpoint, OAuth, launcher,
   deploy, pricing) is NEVER published. Releases go out as one squash snapshot built by
-  `scripts/public_snapshot.sh <v>` (excludes hosted/ + runner-manifest.yml) onto branch `public-main`,
+  `scripts/public_snapshot.sh <v>` (excludes docs/internal + drafts) onto branch `public-main`,
   pushed by arvand via ~/LAMMPSApp/scripts/release_publish.sh. Never `git push public main`.
 - Release: `swift build -c release` — **ALWAYS run after changes**:
   `/opt/homebrew/bin/mdengine` and `mdengine-mcp` are symlinks into
@@ -30,17 +31,17 @@ macOS MD workbench: `MDEngine` (SwiftUI+Metal viewer), `mdengine-cli`,
   forcefieldsilicon.com; `mcp-publisher login dns --domain forcefieldsilicon.com --private-key ...`
   with the key kept outside git (~/mdengine-hosted/mcp-registry/).
 - Tool `title` + annotations live in `toolMeta` (main.swift) — add an entry for every new tool.
-- Hosted MCP remote = `hosted/endpoint/mde_mcp.py` (tools) + `mde_oauth.py` (OAuth 2.1: DCR + CIMD,
+- Hosted MCP remote = `~/MDEngine-service/endpoint/mde_mcp.py` (tools) + `mde_oauth.py` (OAuth 2.1: DCR + CIMD,
   PKCE S256, consent page takes the API key once, mat_/mrt_ tokens hashed in sqlite). Unknown
   `/.well-known/*` MUST 404 (a 401 there makes Claude.ai demand OAuth it can't find); tools/call
   without a credential = 401 + WWW-Authenticate resource_metadata. Directory portal reads the
   tool title from `annotations.title` and the icon from `/favicon.ico`. Deploy to prod
-  (`deploy/deploy.sh root@mde-api`) is arvand-only (classifier); 101 tests in test_endpoint.py.
+  (`~/MDEngine-service/endpoint/deploy/deploy.sh root@mde-api`) is arvand-only (classifier); tests in test_endpoint.py there.
 - Notarize bare binaries as a zip (`NOTARY_PROFILE=mdengine-notary`); tickets are online-only.
-- Hosted GPU tier (`Sources/LAMMPSCore/HostedClient.swift`, `hosted/CONTRACT.md`): dev
-  loop = `python3 hosted/mock/mock_endpoint.py --port 8788 --data <dir>` +
+- Hosted GPU tier (`Sources/LAMMPSCore/HostedClient.swift`; the SERVICE lives in ~/MDEngine-service — endpoint, CONTRACT.md, mock, parity — since 2026-09-11, GJOB-178): dev
+  loop = `python3 ~/MDEngine-service/mock/mock_endpoint.py --port 8788 --data <dir>` +
   `MDENGINE_HOSTED_URL=http://127.0.0.1:8788/v1 MDENGINE_HOSTED_LAUNCH="{lmp} -in {input} -log log.lammps"`,
-  pod stand-in = `docker/runner-gpu/runner.sh` with `MDE_WORK`/`LMP` (see hosted/README.md).
+  pod stand-in = `docker/runner-gpu/runner.sh` with `MDE_WORK`/`LMP` (see ~/MDEngine-service/README.md).
 
 ## Gotchas that already bit
 - SPM does NOT prune deleted resources from an existing

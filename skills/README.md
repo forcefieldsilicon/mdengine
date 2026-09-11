@@ -25,8 +25,10 @@ with the commands and tool ids spelled out.
 | `tools/deformation/` | Deformation — Where did the material yield |
 | `tools/diffusion/` | Diffusion (MSD) — How mobile are the atoms |
 | `tools/fep_results/` | FEP results (ΔΔG) — Which compound to make next |
+| `tools/campaign_matrix/` | Campaign matrix (tiers) — Which ligand, on which receptor, and how sure |
 | `tools/kinetics_tramd/` | Unbinding kinetics (τRAMD) — How long does it stay bound |
 | `tools/ptm/` | PTM (orientation & grains) — Grains and orientation |
+| `tools/grains/` | Grain boundaries — How many grains, how big, and what angles between them |
 | `tools/pulloff_energetics/` | Pull-off energetics — What did the pull cost |
 | `tools/rdf/` | Radial distribution — How is the material packed |
 | `tools/thermo/` | Thermo (log.lammps) — What did the LAMMPS run report |

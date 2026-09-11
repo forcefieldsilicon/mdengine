@@ -1,6 +1,6 @@
 # OpenMM runner image (hosted accelerated tier)
 
-Same pull-runner contract as `../runner-gpu` (see `hosted/CONTRACT.md`): the pod boots, fetches one
+Same pull-runner contract as `../runner-gpu` (see `CONTRACT.md in the MDEngine-service repo`): the pod boots, fetches one
 job with a one-shot token, runs the job spec's `launch` line in `/work`, uploads a results tarball,
 POSTs `done`, exits. No inbound network, no ssh, no public IP needed.
 

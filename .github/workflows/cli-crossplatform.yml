@@ -1,0 +1,66 @@
+# The CLI off macOS (GJOB-190).
+#
+# Only the `mdengine-cli` product is built here, and deliberately: MDEngine.app, MDRender and the MCP server
+# are AppKit/Metal and will never leave the Mac, but the CLI is Foundation-only (LAMMPSCore included) and is
+# the surface a Linux user needs to reach the hosted GPU tier. CI/ci.yml still owns macOS build + test; this
+# workflow exists to catch the things only another platform notices -- FoundationNetworking, the pure-Swift
+# DEFLATE path in Tar.swift, and the type-checker timeouts that only bite off-Apple.
+name: CLI cross-platform
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    # The official Swift image, so the toolchain is the same one used to develop this locally (in Docker on
+    # an Apple silicon Mac -- same image, different arch, which is the point of building x86_64 here).
+    container: swift:6.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (release)
+        run: swift build -c release --product mdengine-cli
+      # Running --help is the smoke test that matters: it proves the binary links and starts, which is where
+      # a missing FoundationNetworking or an Apple-only symbol actually shows up.
+      - name: Smoke test
+        run: ./.build/release/mdengine-cli --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mdengine-cli-linux-x86_64
+          path: .build/release/mdengine-cli
+          if-no-files-found: error
+      # Releases get a tarball attached, not just a CI artifact: CI artifacts expire and need a GitHub login,
+      # a release asset is a URL you can curl on a fresh box.
+      - name: Attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          name="mdengine-cli-${TAG}-linux-x86_64.tar.gz"
+          tar -czf "$name" -C .build/release mdengine-cli
+          gh release upload "$TAG" "$name" --clobber
+
+  windows:
+    runs-on: windows-latest
+    # Best effort. Windows has no fnmatch(3) (Tar's exclude matcher) and swift-corelibs-foundation is thinner
+    # there, so this is a signal, not a gate -- it must never block a merge. Fix it when someone asks for it.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0"
+      - name: Build (release)
+        id: build
+        run: swift build -c release --product mdengine-cli
+      - uses: actions/upload-artifact@v4
+        if: steps.build.outcome == 'success'
+        with:
+          name: mdengine-cli-windows-x86_64
+          path: .build/release/mdengine-cli.exe
+          if-no-files-found: error

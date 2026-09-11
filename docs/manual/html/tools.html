@@ -740,6 +740,151 @@ mdengine analyze column_field dump.lammpstrj --frames 0-200:10 --json</pre>
   fallback and cancellation are covered too.</p>
 </section>
 
+<section>
+  <h2 id="grains">grains — Grain boundaries</h2>
+  <p><span class="badge">perAtomField</span><span class="badge">profile</span><span
+  class="badge">scalar</span><span class="badge">timeSeries</span> Structure
+  &amp; order · no requirements · strided preview supported</p>
+
+  <h3>Method</h3>
+  <p>PTM answers “what structure is this atom in, and how is its lattice
+  turned”. This tool asks the question a deposited film or an annealed sample
+  actually raises: <b>how many grains, how big, how much of the solid is
+  boundary, and what misorientations do those boundaries carry</b>. The
+  orientations come from exactly the same code — the classification and the
+  segmentation are shared with <a href="#ptm"><code>ptm</code></a>
+  (<code>GrainSegmentation.swift</code>), so the two tools cannot drift apart.</p>
+
+  <p>Three steps. <b>(1) Cluster.</b> Atoms that match a template are unioned
+  with every same-structure neighbour whose symmetry-reduced disorientation is
+  under <code>gbAngle</code>; clusters below <code>minimumGrainSize</code> atoms
+  are dropped. <b>(2) Contact.</b> A sharp high-angle boundary is a layer of
+  atoms that match <i>no</i> template, so the two crystals never see each other
+  and a neighbour-to-neighbour test finds nothing. The tool therefore walks the
+  contacts <i>through</i> that layer: an atom touching two different clusters at
+  once is a grain-boundary atom, and the angle it sits on is the disorientation
+  between the two clusters it bridges. Low-angle boundaries, where the atoms
+  stay matched across the interface, are caught by the direct test as before.
+  <b>(3) Merge.</b> Two clusters that meet at less than <code>gbAngle</code> are
+  one grain that a defect layer happened to cut in two, so they are merged
+  before anything is counted. Grains are then numbered 1…K largest first.</p>
+
+  <p>Grain size is reported in atoms and, when the frame has a box, as the
+  <b>equivalent spherical diameter</b> of the grain's share of the cell volume,
+  d = 2·(3·N·v/4π)<sup>⅓</sup> with v = V<sub>cell</sub>/N<sub>atoms</sub>. With a
+  large vacuum or gas region in the box that v is too big and the diameter is an
+  overestimate; the result says so in a note.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>quantity</code></td>
+        <td><code>"grain"</code>/<code>"gb"</code>/<code>"misorientation"</code></td>
+        <td><code>"grain"</code></td>
+        <td>What colours the atoms. <code>grain</code> = the grain id as a
+            categorical colour (0 = boundary or unassigned, grey; up to 23 grains
+            get a legend, above that the id is shown as a ramp);
+            <code>gb</code> = interior grey / boundary orange;
+            <code>misorientation</code> = degrees, the largest disorientation to
+            any same-structure neighbour, so an interior atom reads ~0 and a
+            boundary atom carries the angle of the boundary it sits on.</td></tr>
+    <tr><td><code>gbAngle</code></td><td>number (degrees)</td><td>5.0</td>
+        <td>Disorientation that separates two grains — the clustering cut, and
+            the cut below which two touching clusters are merged back into
+            one.</td></tr>
+    <tr><td><code>minimumGrainSize</code></td><td>integer</td><td>4</td>
+        <td>Clusters below this many atoms are not grains (same meaning as PTM's
+            fixed value).</td></tr>
+    <tr><td><code>rmsdThreshold</code></td><td>number</td><td>0.1</td>
+        <td>PTM fit residual above which an atom matches nothing and takes no
+            part in the grain analysis.</td></tr>
+    <tr><td><code>structure</code></td>
+        <td><code>"any"</code>/<code>"fcc"</code>/<code>"bcc"</code>/<code>"hcp"</code></td>
+        <td><code>"any"</code></td>
+        <td>Which lattice the grains are made of. Naming one searches a single
+            template and costs a third of <code>"any"</code>.</td></tr>
+    <tr><td><code>profileAxis</code></td>
+        <td><code>"misorientation"</code>/<code>"x"</code>/<code>"y"</code>/<code>"z"</code></td>
+        <td><code>"misorientation"</code></td>
+        <td>The misorientation distribution (one entry per boundary contact) or
+            the grain-boundary fraction binned along an axis.</td></tr>
+    <tr><td><code>bins</code></td><td>integer</td><td>18</td>
+        <td>Histogram bins. The misorientation histogram runs over a fixed
+            0–62.8° (the cubic Mackenzie limit; 93.8° when the frame is mostly
+            hcp), so two frames of the same material are directly
+            comparable.</td></tr>
+  </table>
+
+  <h3>Reading the result</h3>
+  <p>Grain count (the scalar, so it plots straight over frames — grain growth is
+  a falling count), grain-boundary atom fraction, crystalline fraction, mean and
+  median grain size in atoms and in Å, mean misorientation over the boundary
+  contacts, and the number of those contacts. The profile is the misorientation
+  distribution function unless an axis is asked for.</p>
+
+  <h3>Validation</h3>
+  <p><code>GrainBoundaryToolTests</code> runs synthetic polycrystals: slabs of
+  Al fcc cut from one lattice and turned about z, periodic in z (a z rotation
+  keeps the lattice periodic along z but not along x or y, so those faces stay
+  open and no wrap seam can pose as a boundary). A perfect crystal gives one
+  grain, no boundary atoms and a diameter equal to the box read as a sphere. A
+  bicrystal turned 30° gives exactly two grains, a mean misorientation of 30°
+  ± 2°, a boundary fraction of a few percent, and every flagged atom within 1.5
+  lattice spacings of the interface plane; the distribution peaks in the 30°
+  bin. A tricrystal (0°, 20°, 40°) gives three. Shaking every atom by a Gaussian
+  of 2 % of the nearest-neighbour distance changes neither the grain count nor
+  the mean angle. Raising <code>gbAngle</code> past the boundary angle merges the
+  bicrystal back into one grain; a <code>minimumGrainSize</code> above the whole
+  crystal counts none.</p>
+  <p>Implementation:
+  <code>Sources/LAMMPSCore/Analysis/GrainBoundaryTool.swift</code> and
+  <code>GrainSegmentation.swift</code> (shared with <code>ptm</code>).</p>
+</section>
+
+  <h2 id="campaign_matrix">campaign_matrix — Campaign matrix (tiers)</h2>
+  <p><span class="badge">scalar</span><span class="badge">timeSeries</span>
+  Adhesion &amp; binding · needs a side file (<code>matrix.json</code>) · no strided preview</p>
+
+  <h3>Method</h3>
+  <p>Reads the <code>matrix.json</code> written by the delivery suite's campaign driver
+  (<code>delivery/module1/campaign.py matrix</code>, schema <code>dsuite.matrix/1</code>): one cell
+  per (ligand, receptor) pair with its median and IQR/2 band over seeds, the per-column tier letter,
+  the resolution floor the campaign achieved, the selectivity ratio of each row against the primary
+  receptor with a propagated band, coverage, and the union of every contributing cell's compromises.
+  The summary leads with coverage and resolution — they qualify everything under them — then one row
+  per ligand across every receptor, then the walked column, then selectivity. The scalar is the value
+  of cell <i>i</i> of one receptor column, so the chart's "frame" axis is the cell index here.</p>
+
+  <p>Two properties of a real campaign shape the tool. Most cells are legitimately empty, because
+  system prep (poses, residue parameters) is the bottleneck rather than GPU time — so a cell with no
+  number renders as its state (<code>needs-prep</code>, <code>prepared</code>, <code>partial</code>,
+  <code>failed</code>) and never as a zero, and the walked column contains delivered cells only. And
+  the ranking is <i>tiered</i>: two cells are separated only when their bands do not overlap
+  (|Δv| &gt; u<sub>i</sub> + u<sub>j</sub>), so a strict 1…N order is not measured and is not printed.
+  Direction (which way is stronger), label and unit are read from the file, never assumed here.</p>
+
+  <h3>Parameters</h3>
+  <table>
+    <tr><th>Name</th><th>Type</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td><code>jsonPath</code></td><td>string or null</td><td>null</td><td>Explicit matrix.json; null = beside the anchor, in a <code>results*/</code> sibling, or up at the campaign root.</td></tr>
+    <tr><td><code>receptor</code></td><td>string or null</td><td>null</td><td>Which receptor column the frame axis walks; null = the campaign's primary receptor.</td></tr>
+    <tr><td><code>sortBy</code></td><td>tier | value | band</td><td>tier</td><td>Order of the walked column. <code>band</code> puts the widest band first — the re-run queue.</td></tr>
+  </table>
+
+  <h3>Reference</h3>
+  <p>Tier (letter-display) reporting of groups that are not separated at the achieved resolution is
+  the standard multiple-comparison convention; the band here is IQR/2 over seeds, a coarse interval
+  rather than a σ, so it is quoted as a band. Selectivity is reported as a ratio because the two
+  cells of a row share protocol, loading rate and probe, and those systematic errors largely cancel
+  in the ratio while dominating the absolute value.</p>
+
+  <h3>Validation</h3>
+  <p>Unit tests decode the schema, keep undelivered cells absent rather than zero, honour the file's
+  direction when sorting, name an unresolved selectivity as no selectivity, render a freshly
+  initialised campaign with no delivered cell, and locate <code>matrix.json</code> from a seed
+  directory deep inside the campaign. Verified end to end through the CLI on the live
+  <code>gnrhr-panel-20260909</code> campaign (10 ligands × 3 receptors, 1 of 30 cells delivered).</p>
+
   <h2 id="fep_results">fep_results — FEP results (ΔΔG)</h2>
   <p><span class="badge">scalar</span><span class="badge">timeSeries</span>
   Adhesion &amp; binding · needs a side file (<code>results.json</code>) · no strided preview</p>

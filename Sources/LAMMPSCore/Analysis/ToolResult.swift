@@ -103,7 +103,8 @@ public struct Profile: Codable, Equatable {
     /// Bin midpoints, for plotting.
     public var centers: [Double] {
         guard edges.count > 1 else { return [] }
-        return (0..<(edges.count - 1)).map { (edges[$0] + edges[$0 + 1]) / 2 }
+        // Explicit closure type: see ForceCurve.reportInterval_ps -- inferred, this times out on Linux.
+        return (0..<(edges.count - 1)).map { (i: Int) -> Double in (edges[i] + edges[i + 1]) / 2 }
     }
 }
 

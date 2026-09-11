@@ -8,7 +8,7 @@
     "source": "github"
   },
   "websiteUrl": "https://forcefieldsilicon.com/mdengine",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "remotes": [
     {
       "type": "streamable-http",
@@ -26,8 +26,8 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/forcefieldsilicon/mdengine/releases/download/v0.7.0/mdengine-mcp-0.7.0-macos-arm64.mcpb",
-      "fileSha256": "b5ee7534d0235e68d42ff63e73e735857aabb19b3e0c9f08579e79051da646a0",
+      "identifier": "https://github.com/forcefieldsilicon/mdengine/releases/download/v0.7.1/mdengine-mcp-0.7.1-macos-arm64.mcpb",
+      "fileSha256": "9b9713fec2548ee1c149ef7077982f5ef0394fc22be9b99210377c3dc3a0383a",
       "transport": {
         "type": "stdio"
       }

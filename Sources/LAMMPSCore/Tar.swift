@@ -1,7 +1,15 @@
 import Foundation
+// Compression is Apple-only. Off-Apple (the Linux CLI, GJOB-190) the DEFLATE work is done by the
+// pure-Swift path at the bottom of this file. Darwin/Glibc are here for fnmatch(3).
+#if canImport(Compression)
 import Compression
+#endif
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
 #endif
 
 /// tar.gz without spawning `/usr/bin/tar` (GJOB-152).
@@ -240,13 +248,22 @@ public enum Tar {
     }
 
     static func deflate(_ input: Data) throws -> Data {
-        try transform(input, operation: COMPRESSION_STREAM_ENCODE, capacityHint: max(input.count / 2, 4096))
+        #if canImport(Compression)
+        return try transform(input, operation: COMPRESSION_STREAM_ENCODE, capacityHint: max(input.count / 2, 4096))
+        #else
+        return storedDeflate(input)
+        #endif
     }
 
     static func inflate(_ input: Data, hint: Int) throws -> Data {
-        try transform(input, operation: COMPRESSION_STREAM_DECODE, capacityHint: max(hint, input.count * 4, 4096))
+        #if canImport(Compression)
+        return try transform(input, operation: COMPRESSION_STREAM_DECODE, capacityHint: max(hint, input.count * 4, 4096))
+        #else
+        return try pureInflate(input, hint: hint)
+        #endif
     }
 
+    #if canImport(Compression)
     /// Streamed so a multi-hundred-MB trajectory does not need a single buffer big enough for all of it.
     static func transform(_ input: Data, operation: compression_stream_operation, capacityHint: Int) throws -> Data {
         var stream = compression_stream(dst_ptr: UnsafeMutablePointer<UInt8>(bitPattern: 1)!, dst_size: 0,
@@ -280,6 +297,8 @@ public enum Tar {
         }
     }
 
+    #endif  // canImport(Compression)
+
     static let crcTable: [UInt32] = (0..<256).map { i -> UInt32 in
         var c = UInt32(i)
         for _ in 0..<8 { c = (c & 1 == 1) ? (0xEDB8_8320 ^ (c >> 1)) : (c >> 1) }
@@ -290,5 +309,173 @@ public enum Tar {
         var c: UInt32 = 0xFFFF_FFFF
         for b in d { c = crcTable[Int((c ^ UInt32(b)) & 0xFF)] ^ (c >> 8) }
         return c ^ 0xFFFF_FFFF
+    }
+
+    // MARK: - pure-Swift DEFLATE (the off-Apple path, GJOB-190)
+    //
+    // The Linux CLI has no Compression framework, and dropping zlib in would mean a system dependency and a
+    // C target in a package that has neither. These two functions are the whole substitute. They are always
+    // compiled, on every platform, so the tests can cross-check them against Apple's implementation on macOS
+    // instead of only finding out in CI that they disagree.
+    //
+    // Asymmetric on purpose:
+    //  - inflate is a real RFC 1951 decoder (stored + fixed + dynamic Huffman) because results tarballs come
+    //    back gzipped by GNU tar with dynamic Huffman blocks. Nothing less would read them.
+    //  - deflate only emits stored blocks (BTYPE=00), i.e. gzip framing around uncompressed bytes. The only
+    //    thing this side compresses is a deck directory -- input scripts and a data file, kilobytes to a few
+    //    megabytes, already filtered by `deckExcludes` -- and every gunzip reads stored blocks. Trading ~0%
+    //    compression on a small upload for not hand-writing a Huffman encoder is the right trade; if decks
+    //    ever get big off-Apple, this is the place to add fixed-Huffman encoding.
+
+    /// RFC 1951 stored blocks: 5 bytes of header per 65535-byte chunk, payload verbatim.
+    static func storedDeflate(_ input: Data) -> Data {
+        let bytes = [UInt8](input)
+        var out = Data(capacity: bytes.count + 5 * (bytes.count / 65535 + 1))
+        var i = 0
+        repeat {                                            // repeat: empty input still needs a final block
+            let n = min(65535, bytes.count - i)
+            let final: UInt8 = (i + n >= bytes.count) ? 1 : 0
+            out.append(final)                               // BFINAL in bit 0, BTYPE=00 in bits 1-2, then
+            let len = UInt16(n), nlen = ~len                // the rest of the byte is skipped to the LEN/NLEN
+            out.append(UInt8(len & 0xff)); out.append(UInt8(len >> 8))
+            out.append(UInt8(nlen & 0xff)); out.append(UInt8(nlen >> 8))
+            if n > 0 { out.append(contentsOf: bytes[i..<(i + n)]) }
+            i += n
+        } while i < bytes.count
+        return out
+    }
+
+    /// Canonical Huffman table in the count/symbol form from zlib's puff.c: `counts[l]` is how many codes
+    /// have length `l`, and `symbols` lists the symbols in code order. Decoding walks one bit at a time,
+    /// which needs no lookup table and no maximum-code-length bookkeeping.
+    struct Huffman {
+        var counts: [Int]
+        var symbols: [Int]
+
+        init(lengths: [Int]) {
+            counts = [Int](repeating: 0, count: 16)
+            for l in lengths where l > 0 { counts[l] += 1 }
+            var offsets = [Int](repeating: 0, count: 16)
+            for l in 1..<15 { offsets[l + 1] = offsets[l] + counts[l] }
+            symbols = [Int](repeating: 0, count: lengths.count)
+            for (sym, l) in lengths.enumerated() where l > 0 {
+                symbols[offsets[l]] = sym
+                offsets[l] += 1
+            }
+        }
+    }
+
+    // RFC 1951 §3.2.5. Index 28 of the length table is the literal 258 with no extra bits.
+    static let lengthBase = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59,
+                             67, 83, 99, 115, 131, 163, 195, 227, 258]
+    static let lengthExtra = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+    static let distBase = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769,
+                           1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+    static let distExtra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+    /// The order code lengths for the code-length alphabet arrive in (RFC 1951 §3.2.7).
+    static let codeLengthOrder = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+
+    /// Inflate a raw DEFLATE stream (no zlib/gzip wrapper -- `gunzip` has already stripped those).
+    static func pureInflate(_ input: Data, hint: Int) throws -> Data {
+        let src = [UInt8](input)
+        var out = [UInt8]()
+        out.reserveCapacity(max(hint, src.count * 4, 4096))
+        var bit = 0                                                  // absolute bit offset, LSB-first
+
+        func bits(_ n: Int) throws -> Int {
+            var v = 0
+            for i in 0..<n {
+                let byte = bit >> 3
+                guard byte < src.count else { throw TarError("truncated DEFLATE stream") }
+                v |= Int((src[byte] >> UInt8(bit & 7)) & 1) << i
+                bit += 1
+            }
+            return v
+        }
+
+        func decode(_ h: Huffman) throws -> Int {
+            var code = 0, first = 0, index = 0
+            for len in 1...15 {
+                code |= try bits(1)
+                let count = h.counts[len]
+                if code - first < count { return h.symbols[index + (code - first)] }
+                index += count
+                first = (first + count) << 1
+                code <<= 1
+            }
+            throw TarError("invalid Huffman code in DEFLATE stream")
+        }
+
+        /// The literal/length + distance loop, shared by fixed and dynamic blocks.
+        func block(literals: Huffman, distances: Huffman) throws {
+            while true {
+                let sym = try decode(literals)
+                if sym < 256 {
+                    out.append(UInt8(sym))
+                } else if sym == 256 {
+                    return                                           // end of block
+                } else {
+                    let li = sym - 257
+                    guard li < lengthBase.count else { throw TarError("invalid length code \(sym)") }
+                    let length = lengthBase[li] + (try bits(lengthExtra[li]))
+                    let di = try decode(distances)
+                    guard di < distBase.count else { throw TarError("invalid distance code \(di)") }
+                    let dist = distBase[di] + (try bits(distExtra[di]))
+                    guard dist <= out.count else { throw TarError("DEFLATE back-reference before the start of the stream") }
+                    // Byte-at-a-time so overlapping copies (dist < length, how runs are encoded) work.
+                    var from = out.count - dist
+                    for _ in 0..<length { out.append(out[from]); from += 1 }
+                }
+            }
+        }
+
+        var fixedLiterals: Huffman { Huffman(lengths: (0..<288).map { $0 < 144 ? 8 : ($0 < 256 ? 9 : ($0 < 280 ? 7 : 8)) }) }
+        var fixedDistances: Huffman { Huffman(lengths: [Int](repeating: 5, count: 30)) }
+
+        while true {
+            let final = try bits(1)
+            switch try bits(2) {
+            case 0:                                                  // stored
+                bit = (bit + 7) & ~7                                 // LEN starts on a byte boundary
+                let p = bit >> 3
+                guard p + 4 <= src.count else { throw TarError("truncated stored DEFLATE block") }
+                let len = Int(src[p]) | Int(src[p + 1]) << 8
+                let nlen = Int(src[p + 2]) | Int(src[p + 3]) << 8
+                guard len == (~nlen & 0xffff) else { throw TarError("corrupt stored DEFLATE block (LEN/NLEN mismatch)") }
+                guard p + 4 + len <= src.count else { throw TarError("truncated stored DEFLATE block") }
+                out.append(contentsOf: src[(p + 4)..<(p + 4 + len)])
+                bit = (p + 4 + len) << 3
+            case 1:
+                try block(literals: fixedLiterals, distances: fixedDistances)
+            case 2:
+                let hlit = try bits(5) + 257, hdist = try bits(5) + 1, hclen = try bits(4) + 4
+                var clen = [Int](repeating: 0, count: 19)
+                for i in 0..<hclen { clen[codeLengthOrder[i]] = try bits(3) }
+                let clHuff = Huffman(lengths: clen)
+                // One run-length-coded list holds both alphabets; 16/17/18 repeats may straddle the split,
+                // so decode the whole thing first and cut afterwards.
+                var lengths = [Int]()
+                lengths.reserveCapacity(hlit + hdist)
+                while lengths.count < hlit + hdist {
+                    let sym = try decode(clHuff)
+                    switch sym {
+                    case 0...15: lengths.append(sym)
+                    case 16:
+                        guard let prev = lengths.last else { throw TarError("DEFLATE repeat code with nothing to repeat") }
+                        for _ in 0..<(3 + (try bits(2))) { lengths.append(prev) }
+                    case 17: for _ in 0..<(3 + (try bits(3))) { lengths.append(0) }
+                    case 18: for _ in 0..<(11 + (try bits(7))) { lengths.append(0) }
+                    default: throw TarError("invalid code-length symbol \(sym)")
+                    }
+                }
+                guard lengths.count == hlit + hdist else { throw TarError("DEFLATE code-length run overflows the alphabets") }
+                try block(literals: Huffman(lengths: Array(lengths[0..<hlit])),
+                          distances: Huffman(lengths: Array(lengths[hlit...])))
+            default:
+                throw TarError("reserved DEFLATE block type")
+            }
+            if final == 1 { break }
+        }
+        return Data(out)
     }
 }

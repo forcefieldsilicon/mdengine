@@ -10,7 +10,7 @@
   "documentation": "https://github.com/forcefieldsilicon/mdengine#mcp-server",
   "support": "https://github.com/forcefieldsilicon/mdengine/issues",
   "repository": { "type": "git", "url": "https://github.com/forcefieldsilicon/mdengine" },
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "icon": "icon.png",
   "server": {
     "type": "binary",
