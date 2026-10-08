@@ -2,12 +2,21 @@
 
 *by ForceField Silicon*
 
-A native macOS molecular-dynamics workbench: a Metal trajectory viewer, a
-command-line tool, and an MCP server that lets AI agents inspect trajectories
-and run LAMMPS simulations as detached background jobs.
+A molecular-dynamics workbench with a LAMMPS MCP server for Claude and other agents: a native
+macOS Metal trajectory viewer, a command-line tool, and an MCP server that inspects trajectories
+and runs LAMMPS simulations as detached background jobs. The hosted tier runs the same jobs on a
+GPU: Claude sends a deck to the molecular dynamics MCP server at api.forcefieldsilicon.com and
+gets the results back, with nothing to install.
 
-> **Status: pre-release.** Not yet distributed; the app is ad-hoc signed
-> (builds run on the building machine only until notarization lands).
+**Start here**
+- Claude Code: `claude mcp add --transport http mdengine-cloud https://api.forcefieldsilicon.com/mcp`
+- claude.ai: add a custom connector with the URL `https://api.forcefieldsilicon.com/mcp`
+- Claude Desktop: install the `.mcpb` bundle from the [GitHub release](https://github.com/forcefieldsilicon/mdengine/releases)
+- Your key comes with a credit pack at https://forcefieldsilicon.com/mdengine
+- Campaign guides for mineral processing and protein work: https://github.com/forcefieldsilicon/mdengine-plugins
+
+> **Status: 0.7.1 released.** Signed and notarized macOS app, command-line tool, Claude Desktop
+> bundle, and the hosted GPU tier. Release notes: https://github.com/forcefieldsilicon/mdengine/releases
 
 ## Parts
 
@@ -77,6 +86,7 @@ or in Claude Desktop's `claude_desktop_config.json`:
 | `list_hosts` | Execution hosts from `~/.mdengine/hosts.json` and which is the default |
 | `fetch_job` | Pull a remote job's run directory (dumps, data) + logs into the local job dir under `results/` |
 | `run_lammps` | Synchronous run for short tests only |
+| `buy_credits` | Opens the credit page to top up the hosted GPU key |
 
 ### Hosted GPU tier over MCP (no install)
 
@@ -107,7 +117,7 @@ local build is planned and demand decides its order, so say so if you need it.
 
 discovery pointer, which is what makes clients offer the sign-in. Tools: `account`, `capabilities`, `preflight_deck`, `submit_job` (deck inline, ≤ 8 MB),
 `create_job` + `start_job` (big decks via presigned PUT), `job_status`, `job_log`,
-`job_results`, `list_jobs`, `delete_results`, `cancel_job`. Discovery card:
+`job_results`, `list_jobs`, `delete_results`, `cancel_job` (12 tools). Discovery card:
 `https://api.forcefieldsilicon.com/.well-known/mcp/server-card.json`. The hosted service (endpoint, billing, GPU launcher) is operated by ForceField Silicon and its
 source is not part of this repository; the client side of it (`HostedClient`, CLI `run --gpu`,
 MCP `host=cloud`) is here under the same license as everything else.

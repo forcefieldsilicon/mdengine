@@ -1,0 +1,1 @@
+LAMMPS MCP server for Claude: hosted GPU LAMMPS runs and molecular dynamics trajectory tools.
